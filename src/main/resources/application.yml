@@ -3,18 +3,21 @@ spring:
     name: Smart AI Classroom
 
   datasource:
-    url: jdbc:postgresql://${PGHOST}:${PGPORT}/${PGDATABASE}
-    username: ${PGUSER}
-    password: ${PGPASSWORD}
+    # Supports: Neon / Render (DATABASE_URL) and Railway (PGHOST/PGPORT/PGDATABASE)
+    url: ${DATABASE_URL:jdbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:ai_smart_classroom}}
+    username: ${PGUSER:postgres}
+    password: ${PGPASSWORD:23FE1A0424}
     driver-class-name: org.postgresql.Driver
 
     hikari:
       pool-name: SmartClassroomPool
-      maximum-pool-size: 10
-      minimum-idle: 2
-      idle-timeout: 600000
-      max-lifetime: 1800000
+      maximum-pool-size: 5
+      minimum-idle: 1
+      idle-timeout: 300000
+      max-lifetime: 600000
       connection-timeout: 30000
+      data-source-properties:
+        sslmode: require
 
   jpa:
     open-in-view: true
@@ -82,6 +85,9 @@ app:
       - http://localhost:3000
       - https://*.up.railway.app
       - https://*.railway.app
+      - https://*.onrender.com
+      - https://*.vercel.app
+      - https://*.netlify.app
 
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}

@@ -3,17 +3,22 @@ spring:
     name: Smart AI Classroom
 
   datasource:
-    url: jdbc:postgresql://${PGHOST}:${PGPORT}/${PGDATABASE}
-    username: ${PGUSER}
-    password: ${PGPASSWORD}
+    # Supports: Neon / Render (DATABASE_URL) and Railway (PGHOST/PGPORT/PGDATABASE)
+    url: ${DATABASE_URL:jdbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:ai_smart_classroom}}
+    username: ${PGUSER:postgres}
+    password: ${PGPASSWORD:postgres}
 
     hikari:
       pool-name: SmartClassroomPool
-      maximum-pool-size: 50
-      minimum-idle: 10
-      idle-timeout: 600000
-      max-lifetime: 1800000
+      # Neon free tier: max 100 connections — keep pool small
+      maximum-pool-size: 5
+      minimum-idle: 1
+      idle-timeout: 300000
+      max-lifetime: 600000
       connection-timeout: 30000
+      # Neon requires SSL
+      data-source-properties:
+        sslmode: require
 
   jpa:
     show-sql: false
@@ -24,6 +29,7 @@ spring:
     properties:
       hibernate:
         format_sql: false
+        dialect: org.hibernate.dialect.PostgreSQLDialect
 
   flyway:
     enabled: false
@@ -48,37 +54,31 @@ logging:
     org.springframework: WARN
     org.springframework.security: WARN
     org.hibernate: WARN
-    org.flywaydb: INFO
-
-  file:
-    name: logs/smart-classroom.log
 
 app:
   jwt:
-    # No fallback here on purpose: prod must fail fast if JWT_SECRET is missing.
+    # Render: set JWT_SECRET as environment variable
     secret: ${JWT_SECRET}
 
   cors:
     allowed-origins:
       - ${CORS_ORIGINS:*}
 
-mqtt:
-  broker-url: ${MQTT_BROKER_URL:tcp://mosquitto:1883}
-  client-id: smart-classroom-backend
-  username: ${MQTT_USERNAME:}
-  password: ${MQTT_PASSWORD:}
+face:
+  service:
+    url: ${FACE_SERVICE_URL:http://localhost:8000}
 
 minio:
-  endpoint: ${MINIO_ENDPOINT:http://minio:9000}
-  access-key: ${MINIO_ACCESS_KEY:dominion}
-  secret-key: ${MINIO_SECRET_KEY:dominion}
+  endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin}
   bucket-name: ${MINIO_BUCKET:smart-classroom}
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus
+        include: health,info
 
   endpoint:
     health:

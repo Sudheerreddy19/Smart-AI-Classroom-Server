@@ -1,0 +1,55 @@
+services:
+  - type: web
+    name: smart-classroom-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore   # Choose closest to India
+
+    envVars:
+      # ── Database (Neon) ─────────────────────────────────────────
+      - key: DATABASE_URL
+        sync: false     # Set manually in Render dashboard
+
+      # ── Security ────────────────────────────────────────────────
+      - key: JWT_SECRET
+        generateValue: true   # Render auto-generates a secure random string
+
+      # ── Spring Profile ──────────────────────────────────────────
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+
+      # ── Server Port ─────────────────────────────────────────────
+      - key: PORT
+        value: 8080
+
+      # ── AI / Ollama ─────────────────────────────────────────────
+      - key: OLLAMA_BASE_URL
+        value: http://localhost:11434   # Update if you deploy Ollama separately
+
+      - key: OLLAMA_MODEL
+        value: llama3.2:3b
+
+      # ── CORS (set your frontend URL after deploying frontend) ───
+      - key: CORS_ORIGINS
+        value: "*"    # Update with exact frontend URL later e.g. https://your-app.vercel.app
+
+      # ── File Storage (MinIO - optional) ─────────────────────────
+      - key: MINIO_ENDPOINT
+        value: http://localhost:9000
+
+      - key: MINIO_ACCESS_KEY
+        value: minioadmin
+
+      - key: MINIO_SECRET_KEY
+        value: minioadmin
+
+      # ── Face Recognition Service ─────────────────────────────────
+      - key: FACE_SERVICE_URL
+        value: http://localhost:8000
+
+    # Health check — Render uses this to know app is ready
+    healthCheckPath: /actuator/health
+
+    # Auto-deploy on push to main branch
+    autoDeploy: true
