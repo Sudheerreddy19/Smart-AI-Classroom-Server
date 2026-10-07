@@ -20,24 +20,29 @@ public class DefaultAdminDataInitializer implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        String adminEmail = "byreddy19sudheerreddy@gmail.com";
+        String[] emails = {
+            "byreddy19sudheerreddy@gmail.com",
+            "byreddy19sudheer@gmail.com"
+        };
 
-        if (userRepository.findByEmail(adminEmail).isEmpty()) {
-            User admin = User.builder()
-                    .firstName("Sudheer")
-                    .lastName("Reddy")
-                    .email(adminEmail)
-                    .password(passwordEncoder.encode("23FE1A0424@s"))
-                    .role(User.Role.SUPER_ADMIN)
-                    .enabled(true)
-                    .accountLocked(false)
-                    .failedLoginAttempts(0)
-                    .build();
+        for (String email : emails) {
+            if (userRepository.findByEmail(email).isEmpty()) {
+                User admin = User.builder()
+                        .firstName("Sudheer")
+                        .lastName("Reddy")
+                        .email(email)
+                        .password(passwordEncoder.encode("23FE1A0424@s"))
+                        .role(User.Role.SUPER_ADMIN)
+                        .enabled(true)
+                        .accountLocked(false)
+                        .failedLoginAttempts(0)
+                        .build();
 
-            userRepository.save(admin);
-            log.info("Default SUPER_ADMIN user created: {}", adminEmail);
-        } else {
-            log.info("Default user {} already exists in database.", adminEmail);
+                userRepository.save(admin);
+                log.info("Default SUPER_ADMIN user created: {}", email);
+            } else {
+                log.info("Default user {} already exists in database.", email);
+            }
         }
     }
 }
