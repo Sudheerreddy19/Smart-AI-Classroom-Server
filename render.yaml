@@ -49,7 +49,7 @@ services:
         value: http://localhost:8000
 
     # Health check — Render uses this to know app is ready
-    healthCheckPath: /actuator/health
+    healthCheckPath: /
 
     # Auto-deploy on push to main branch
     autoDeploy: true

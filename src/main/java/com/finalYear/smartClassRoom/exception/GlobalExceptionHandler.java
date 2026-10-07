@@ -47,6 +47,20 @@ public class GlobalExceptionHandler {
                 .body(build(HttpStatus.UNAUTHORIZED, ex.getMessage(), request.getRequestURI()));
     }
 
+    @ExceptionHandler(org.springframework.security.authentication.BadCredentialsException.class)
+    public ResponseEntity<ErrorResponse> handleBadCredentials(
+            org.springframework.security.authentication.BadCredentialsException ex, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(build(HttpStatus.UNAUTHORIZED, "Invalid email or password", request.getRequestURI()));
+    }
+
+    @ExceptionHandler(org.springframework.security.authentication.LockedException.class)
+    public ResponseEntity<ErrorResponse> handleLocked(
+            org.springframework.security.authentication.LockedException ex, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.LOCKED)
+                .body(build(HttpStatus.LOCKED, ex.getMessage(), request.getRequestURI()));
+    }
+
     @ExceptionHandler(AIServiceException.class)
     public ResponseEntity<ErrorResponse> handleAI(
             AIServiceException ex, HttpServletRequest request) {

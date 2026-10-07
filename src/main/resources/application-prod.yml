@@ -83,7 +83,9 @@ management:
 
   endpoint:
     health:
-      show-details: never
+      show-details: always
+      probes:
+        enabled: true
 
 springdoc:
   api-docs:
