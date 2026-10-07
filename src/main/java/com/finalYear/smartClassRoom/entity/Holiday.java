@@ -16,7 +16,7 @@ import java.time.LocalDateTime;
         indexes = {
                 @Index(name = "idx_holiday_date",     columnList = "holiday_date"),
                 @Index(name = "idx_holiday_type",     columnList = "type"),
-                @Index(name = "idx_holiday_semester", columnList = "semester_id")
+                @Index(name = "idx_holiday_semester", columnList = "semester_number")
         }
 )
 @Getter
