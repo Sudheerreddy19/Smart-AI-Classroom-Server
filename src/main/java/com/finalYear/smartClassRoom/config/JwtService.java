@@ -149,9 +149,37 @@ public class JwtService {
 
     private SecretKey getSigningKey() {
         try {
-            return Keys.hmacShaKeyFor(Decoders.BASE64.decode(jwtSecret));
-        } catch (IllegalArgumentException e) {
-            return Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
+            byte[] keyBytes;
+            // 1. If it's a 32-byte hex string (64 chars) or 16-byte hex (32 chars)
+            if (jwtSecret != null && jwtSecret.matches("^[0-9a-fA-F]{32,64}$")) {
+                try {
+                    keyBytes = io.jsonwebtoken.io.Decoders.BASE64.decode(jwtSecret);
+                } catch (Exception ex) {
+                    keyBytes = jwtSecret.getBytes(StandardCharsets.UTF_8);
+                }
+            } else {
+                try {
+                    keyBytes = Decoders.BASE64.decode(jwtSecret);
+                } catch (Exception e) {
+                    keyBytes = jwtSecret.getBytes(StandardCharsets.UTF_8);
+                }
+            }
+            // HMAC-SHA256 requires at least 256 bits (32 bytes)
+            if (keyBytes.length < 32) {
+                java.security.MessageDigest sha256 = java.security.MessageDigest.getInstance("SHA-256");
+                keyBytes = sha256.digest(jwtSecret.getBytes(StandardCharsets.UTF_8));
+            }
+            return Keys.hmacShaKeyFor(keyBytes);
+        } catch (Exception e) {
+            log.error("Error creating JWT signing key: {}", e.getMessage());
+            // Fallback: SHA-256 hash of secret string guarantees 256 bits
+            try {
+                java.security.MessageDigest sha256 = java.security.MessageDigest.getInstance("SHA-256");
+                byte[] hash = sha256.digest(jwtSecret != null ? jwtSecret.getBytes(StandardCharsets.UTF_8) : "default-key".getBytes(StandardCharsets.UTF_8));
+                return Keys.hmacShaKeyFor(hash);
+            } catch (Exception fatal) {
+                throw new RuntimeException("Cannot initialize JWT signing key", fatal);
+            }
         }
     }
 }
