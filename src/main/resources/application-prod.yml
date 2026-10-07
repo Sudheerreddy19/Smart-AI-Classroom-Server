@@ -56,8 +56,10 @@ logging:
 
 app:
   jwt:
-    # Render: set JWT_SECRET as environment variable
-    secret: ${JWT_SECRET}
+    # Render: set JWT_SECRET as environment variable, fallback to default secret if missing
+    secret: ${JWT_SECRET:SmartClassroomHub2025SecretKeyForJWTMin32CharactersLong!!}
+    access-token-expiration: ${JWT_ACCESS_TOKEN_EXPIRATION:3600000}
+    refresh-token-expiration: ${JWT_REFRESH_TOKEN_EXPIRATION:604800000}
 
   cors:
     allowed-origins:
