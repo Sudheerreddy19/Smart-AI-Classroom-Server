@@ -30,6 +30,13 @@ public class EnvironmentResponse {
     private Double noiseLevel;
 
     private Double airQualityIndex;
+    
+    private String roomState;       // "ACTIVE" or "EMPTY"
+    private Boolean isDark;          // true / false
+    private Boolean gasLeak;         // true / false
+    private Double gasPpm;           // Numeric gas reading
+    private String fanStatus;        // "ON" or "OFF"
+    private String lightStatus;      // "ON" or "OFF"
 
     private LocalDateTime recordedAt;
 }

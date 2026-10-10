@@ -71,22 +71,48 @@ public class EnvironmentController {
         return getAllLatest();
     }
 
-    // ── IoT data ingestion (called by ESP32 / Python service) ─────────────────
-    @PostMapping("/ingest")
+    // ── IoT data ingestion (called by ESP32 / Arduino hardware) ───────────────
+    @PostMapping(value = {"/ingest", "/telemetry"})
     public ResponseEntity<String> ingest(@RequestBody EnvironmentIngestRequest req) {
-        classroomRepository.findByEsp32Id(req.esp32Id()).ifPresent(classroom -> {
-            EnvironmentData data = EnvironmentData.builder()
-                    .classroom(classroom)
-                    .temperature(req.temperature())
-                    .humidity(req.humidity())
-                    .co2Level(req.co2Level())
-                    .lightLevel(req.lightLevel())
-                    .noiseLevel(req.noiseLevel())
-                    .airQualityIndex(req.airQualityIndex())
-                    .build();
-            environmentDataRepository.save(data);
-        });
-        return ResponseEntity.ok("OK");
+        Classroom classroom = null;
+        if (req.classroomId() != null) {
+            classroom = classroomRepository.findById(req.classroomId()).orElse(null);
+        }
+        if (classroom == null && req.esp32Id() != null && !req.esp32Id().isBlank()) {
+            classroom = classroomRepository.findByEsp32Id(req.esp32Id()).orElse(null);
+        }
+        if (classroom == null && req.roomNumber() != null && !req.roomNumber().isBlank()) {
+            classroom = classroomRepository.findByRoomNumber(req.roomNumber()).orElse(null);
+        }
+        if (classroom == null) {
+            List<Classroom> allActive = classroomRepository.findByActiveTrue();
+            classroom = allActive.isEmpty() ? null : allActive.get(0);
+        }
+
+        if (classroom == null) {
+            return ResponseEntity.badRequest().body("No active classroom found to associate sensor data with.");
+        }
+
+        Double light = req.lightIntensity() != null ? req.lightIntensity() : req.lightLevel();
+
+        EnvironmentData data = EnvironmentData.builder()
+                .classroom(classroom)
+                .temperature(req.temperature())
+                .humidity(req.humidity())
+                .co2Level(req.co2Level())
+                .lightLevel(light)
+                .noiseLevel(req.noiseLevel())
+                .airQualityIndex(req.airQualityIndex())
+                .roomState(req.roomState())
+                .isDark(req.isDark())
+                .gasLeak(req.gasLeak())
+                .gasPpm(req.gasPpm())
+                .fanStatus(req.fanStatus())
+                .lightStatus(req.lightStatus())
+                .build();
+
+        environmentDataRepository.save(data);
+        return ResponseEntity.ok("Telemetry received and stored successfully.");
     }
 
     // ── Helper ────────────────────────────────────────────────────────────────
@@ -98,6 +124,7 @@ public class EnvironmentController {
                     .build();
         }
         return EnvironmentResponse.builder()
+                .id(data.getId())
                 .classroomId(classroom.getId())
                 .roomNumber(classroom.getRoomNumber())
                 .temperature(data.getTemperature())
@@ -106,18 +133,33 @@ public class EnvironmentController {
                 .lightLevel(data.getLightLevel())
                 .noiseLevel(data.getNoiseLevel())
                 .airQualityIndex(data.getAirQualityIndex())
+                .roomState(data.getRoomState())
+                .isDark(data.getIsDark())
+                .gasLeak(data.getGasLeak())
+                .gasPpm(data.getGasPpm())
+                .fanStatus(data.getFanStatus())
+                .lightStatus(data.getLightStatus())
                 .recordedAt(data.getRecordedAt())
                 .build();
     }
 
-    // ── Inner record for ingest payload ───────────────────────────────────────
+    // ── Record for ingest payload from ESP32 ──────────────────────────────────
     public record EnvironmentIngestRequest(
+            Long classroomId,
+            String roomNumber,
             String esp32Id,
             Double temperature,
             Double humidity,
-            Double co2Level,
+            Double lightIntensity,
             Double lightLevel,
+            Double co2Level,
             Double noiseLevel,
-            Double airQualityIndex
+            Double airQualityIndex,
+            String roomState,       // "ACTIVE" or "EMPTY" (PIR motion)
+            Boolean isDark,         // true / false
+            Boolean gasLeak,        // true / false
+            Double gasPpm,          // Gas sensor value
+            String fanStatus,       // "ON" or "OFF"
+            String lightStatus      // "ON" or "OFF"
     ) {}
 }

@@ -33,8 +33,21 @@ public class DefaultAdminDataInitializer implements CommandLineRunner {
     @Value("${ADMIN_LAST_NAME:User}")
     private String adminLastName;
 
+    private final com.finalYear.smartClassRoom.repository.ClassroomRepository classroomRepository;
+
     @Override
     public void run(String... args) {
+        if (classroomRepository.count() == 0) {
+            com.finalYear.smartClassRoom.entity.Classroom defaultRoom = com.finalYear.smartClassRoom.entity.Classroom.builder()
+                    .roomNumber("LH-101")
+                    .capacity(60)
+                    .esp32Id("ESP32-01")
+                    .active(true)
+                    .build();
+            classroomRepository.save(defaultRoom);
+            log.info("Default classroom LH-101 (ESP32-01) created.");
+        }
+
         if (adminEmail == null || adminEmail.isBlank() || adminPassword == null || adminPassword.isBlank()) {
             log.info("No ADMIN_EMAIL or ADMIN_PASSWORD environment variables found. Skipping automatic admin seeding.");
             return;

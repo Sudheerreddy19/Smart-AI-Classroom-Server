@@ -62,8 +62,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/departments").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/semesters").permitAll()
 
-                // ── IoT: ESP32 heartbeat (no auth needed from hardware) ────────
+                // ── IoT: Hardware telemetry & heartbeat (no auth needed from hardware) ──
                 .requestMatchers("/api/devices/*/heartbeat").permitAll()
+                .requestMatchers("/api/environment/ingest", "/api/iot/telemetry").permitAll()
 
                 // ── SUPER_ADMIN only ──────────────────────────────────────────
                 .requestMatchers("/api/super-admin/**")
