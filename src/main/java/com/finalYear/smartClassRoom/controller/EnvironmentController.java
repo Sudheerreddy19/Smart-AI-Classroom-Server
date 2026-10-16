@@ -139,6 +139,10 @@ public class EnvironmentController {
                 .gasPpm(data.getGasPpm())
                 .fanStatus(data.getFanStatus())
                 .lightStatus(data.getLightStatus())
+                .ldrRaw(data.getLdrRaw())
+                .motionDetected(data.getMotionDetected())
+                .deviceId(data.getDeviceId())
+                .hardwareClassroomId(data.getHardwareClassroomId())
                 .recordedAt(data.getRecordedAt())
                 .build();
     }

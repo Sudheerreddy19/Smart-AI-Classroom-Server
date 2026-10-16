@@ -62,6 +62,18 @@ public class EnvironmentData {
     @Column(name = "light_status", length = 10)
     private String lightStatus; // ON or OFF
 
+    @Column(name = "ldr_raw")
+    private Integer ldrRaw; // Raw LDR ADC value from hardware
+
+    @Column(name = "motion_detected")
+    private Boolean motionDetected; // true / false (PIR motion sensor)
+
+    @Column(name = "device_id", length = 100)
+    private String deviceId; // Hardware device identifier e.g. "ESP32_01"
+
+    @Column(name = "hardware_classroom_id", length = 100)
+    private String hardwareClassroomId; // Classroom ID string from hardware e.g. "CLASSROOM_01"
+
     @CreationTimestamp
     @Column(name = "recorded_at", nullable = false, updatable = false)
     private LocalDateTime recordedAt;

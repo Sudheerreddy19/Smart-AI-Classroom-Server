@@ -37,6 +37,10 @@ public class EnvironmentResponse {
     private Double gasPpm;           // Numeric gas reading
     private String fanStatus;        // "ON" or "OFF"
     private String lightStatus;      // "ON" or "OFF"
+    private Integer ldrRaw;          // Raw LDR ADC value
+    private Boolean motionDetected;  // PIR motion sensor
+    private String deviceId;         // Hardware device ID e.g. "ESP32_01"
+    private String hardwareClassroomId; // Hardware classroom string e.g. "CLASSROOM_01"
 
     private LocalDateTime recordedAt;
 }
