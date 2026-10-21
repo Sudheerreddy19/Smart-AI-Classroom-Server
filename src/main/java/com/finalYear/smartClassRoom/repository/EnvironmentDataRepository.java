@@ -11,6 +11,9 @@ public interface EnvironmentDataRepository extends JpaRepository<EnvironmentData
 
     List<EnvironmentData> findByClassroom(Classroom classroom);
 
+    List<EnvironmentData> findByClassroomOrderByRecordedAtAsc(Classroom classroom);
+
     EnvironmentData findTopByClassroomOrderByRecordedAtDesc(Classroom classroom);
 
+    java.util.Optional<EnvironmentData> findTopByOrderByRecordedAtDesc();
 }

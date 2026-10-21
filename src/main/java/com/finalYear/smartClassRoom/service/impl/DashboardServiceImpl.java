@@ -22,6 +22,7 @@ public class DashboardServiceImpl implements DashboardService {
     private final ClassroomRepository classroomRepository;
     private final AttendanceSessionRepository attendanceSessionRepository;
     private final DeviceRepository deviceRepository;
+    private final EnvironmentDataRepository environmentDataRepository;
     private final CurrentUserContextService currentUserCtx;
 
     @Override
@@ -64,10 +65,32 @@ public class DashboardServiceImpl implements DashboardService {
         double avgAttendanceRate = attendanceSessionRepository.getAverageAttendanceRate();
 
         Map<String, Object> environmentSummary = new HashMap<>();
-        environmentSummary.put("temperature", 0);
-        environmentSummary.put("humidity", 0);
-        environmentSummary.put("airQuality", "N/A");
-        environmentSummary.put("lightLevel", 0);
+        environmentDataRepository.findTopByOrderByRecordedAtDesc().ifPresentOrElse(
+                latest -> {
+                    environmentSummary.put("temperature", latest.getTemperature() != null ? latest.getTemperature() : 0);
+                    environmentSummary.put("humidity", latest.getHumidity() != null ? latest.getHumidity() : 0);
+                    environmentSummary.put("airQuality", latest.getAirQualityIndex() != null ? latest.getAirQualityIndex() : "Good");
+                    environmentSummary.put("lightLevel", latest.getLightLevel() != null ? latest.getLightLevel() : 0);
+                    environmentSummary.put("roomState", latest.getRoomState() != null ? latest.getRoomState() : "ACTIVE");
+                    environmentSummary.put("fanStatus", latest.getFanStatus() != null ? latest.getFanStatus() : "OFF");
+                    environmentSummary.put("lightStatus", latest.getLightStatus() != null ? latest.getLightStatus() : "OFF");
+                    environmentSummary.put("isDark", latest.getIsDark() != null ? latest.getIsDark() : false);
+                    environmentSummary.put("gasLeak", latest.getGasLeak() != null ? latest.getGasLeak() : false);
+                    environmentSummary.put("ldrRaw", latest.getLdrRaw() != null ? latest.getLdrRaw() : 0);
+                    environmentSummary.put("roomNumber", latest.getClassroom() != null ? latest.getClassroom().getRoomNumber() : "Room 101");
+                },
+                () -> {
+                    environmentSummary.put("temperature", 0);
+                    environmentSummary.put("humidity", 0);
+                    environmentSummary.put("airQuality", "N/A");
+                    environmentSummary.put("lightLevel", 0);
+                    environmentSummary.put("roomState", "EMPTY");
+                    environmentSummary.put("fanStatus", "OFF");
+                    environmentSummary.put("lightStatus", "OFF");
+                    environmentSummary.put("isDark", false);
+                    environmentSummary.put("gasLeak", false);
+                }
+        );
 
         return DashboardResponse.builder()
                 .totalStudents(totalStudents)

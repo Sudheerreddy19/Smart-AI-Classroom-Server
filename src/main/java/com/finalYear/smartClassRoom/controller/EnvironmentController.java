@@ -55,7 +55,7 @@ public class EnvironmentController {
                 .orElseThrow(() -> new com.finalYear.smartClassRoom.exception
                         .ResourceNotFoundException("Classroom", classroomId));
         List<EnvironmentData> data = environmentDataRepository
-                .findByClassroom(classroom);
+                .findByClassroomOrderByRecordedAtAsc(classroom);
         // Return last `limit` records
         int size = data.size();
         List<EnvironmentData> paged = data.subList(Math.max(0, size - limit), size);
