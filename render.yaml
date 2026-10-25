@@ -4,16 +4,16 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
-    region: singapore   # Choose closest to India
+    region: singapore   # Closest to India
 
     envVars:
-      # ── Database (Neon) ─────────────────────────────────────────
+      # ── Database (Neon PostgreSQL with pgvector) ────────────────
       - key: DATABASE_URL
-        sync: false     # Set manually in Render dashboard
+        sync: false     # Set in Render dashboard: jdbc:postgresql://ep-xxx.neon.tech/neondb?sslmode=require
 
       # ── Security ────────────────────────────────────────────────
       - key: JWT_SECRET
-        generateValue: true   # Render auto-generates a secure random string
+        generateValue: true   # Render auto-generates a secure random 32+ char string
 
       # ── Spring Profile ──────────────────────────────────────────
       - key: SPRING_PROFILES_ACTIVE
@@ -23,16 +23,36 @@ services:
       - key: PORT
         value: 8080
 
-      # ── AI / Ollama ─────────────────────────────────────────────
+      # ── Memory Optimization (Render Free Tier 512MB RAM) ────────
+      - key: JAVA_TOOL_OPTIONS
+        value: "-Xmx384m -XX:+UseSerialGC -XX:MaxRAMPercentage=75.0"
+
+      # ── Google Gemini Cloud AI (Free-Tier) ───────────────────────
+      - key: AI_PROVIDER
+        value: gemini
+
+      - key: GEMINI_API_KEY
+        sync: false     # Set in Render dashboard: your Google AI Studio API key
+
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash
+
+      - key: GEMINI_TIMEOUT
+        value: 45
+
+      - key: AI_RATE_LIMIT_RPM
+        value: 15
+
+      # ── Fallback Ollama (Optional) ───────────────────────────────
       - key: OLLAMA_BASE_URL
-        value: http://localhost:11434   # Update if you deploy Ollama separately
+        value: http://localhost:11434
 
       - key: OLLAMA_MODEL
         value: llama3.2:3b
 
-      # ── CORS (set your frontend URL after deploying frontend) ───
+      # ── CORS (set your frontend URL e.g. Vercel/Netlify) ─────────
       - key: CORS_ORIGINS
-        value: "*"    # Update with exact frontend URL later e.g. https://your-app.vercel.app
+        value: "*"
 
       # ── File Storage (MinIO - optional) ─────────────────────────
       - key: MINIO_ENDPOINT

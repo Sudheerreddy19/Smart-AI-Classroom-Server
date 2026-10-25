@@ -19,6 +19,7 @@ public class AgentRequest {
     private User.Role role;
     private String    prompt;
     private Long      sessionId;
+    private Long      classroomId;
 
     /** Optional subject context (e.g., "Data Structures", "DBMS") */
     private String    subjectContext;

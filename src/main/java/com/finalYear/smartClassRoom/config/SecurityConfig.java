@@ -65,6 +65,7 @@ public class SecurityConfig {
                 // ── IoT: Hardware telemetry & heartbeat (no auth needed from hardware) ──
                 .requestMatchers("/api/devices/*/heartbeat").permitAll()
                 .requestMatchers("/api/environment/ingest", "/api/iot/telemetry").permitAll()
+                .requestMatchers("/api/ai/provider-status", "/api/ai/test").permitAll()
 
                 // ── SUPER_ADMIN only ──────────────────────────────────────────
                 .requestMatchers("/api/super-admin/**")
@@ -186,8 +187,19 @@ public class SecurityConfig {
                     .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER", "STUDENT")
 
                 // ── AI ────────────────────────────────────────────────────────
-                    .requestMatchers("/api/ai/**")
-                    .authenticated()
+                    .requestMatchers("/api/ai/**").authenticated()
+
+                // ── Knowledge Base (RAG) ──────────────────────────────────────
+                .requestMatchers(HttpMethod.POST, "/api/knowledge/upload")
+                    .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER")
+                .requestMatchers(HttpMethod.DELETE, "/api/knowledge/documents/**")
+                    .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER")
+                .requestMatchers(HttpMethod.POST, "/api/knowledge/documents/*/reindex")
+                    .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER")
+                .requestMatchers("/api/knowledge/**").authenticated()
+
+
+
 
                 // ── Live Bus Tracking: Strictly restricted to STUDENT role ──
                 .requestMatchers("/api/bus-tracking/**")

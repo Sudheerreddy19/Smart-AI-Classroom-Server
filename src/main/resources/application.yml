@@ -41,14 +41,6 @@ spring:
     serialization:
       write-dates-as-timestamps: false
 
-  ai:
-    ollama:
-      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
-      chat:
-        options:
-          model: ${OLLAMA_MODEL:llama3.2:3b}
-          temperature: 0.7
-
 face:
   service:
     url: ${FACE_SERVICE_URL:http://localhost:8000}
@@ -68,7 +60,6 @@ logging:
     dev.langchain4j: DEBUG
     com.finalYear: DEBUG
 
-
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
@@ -78,6 +69,23 @@ app:
     secret: SmartClassroomHub2025SecretKeyForJWTMin32CharactersLong!!
     access-token-expiration: 3600000
     refresh-token-expiration: 604800000
+
+  ai:
+    provider: ${AI_PROVIDER:gemini}
+    gemini:
+      api-key: ${GEMINI_API_KEY:}
+      model: ${GEMINI_MODEL:gemini-3.8-flash}
+      timeout-seconds: ${GEMINI_TIMEOUT:30}
+      temperature: ${GEMINI_TEMPERATURE:0.7}
+      max-retries: 2
+      backoff-ms: 1000
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      model: ${OLLAMA_MODEL:llama3.2:3b}
+      timeout-seconds: 15
+      temperature: 0.7
+    rate-limit:
+      requests-per-minute: ${AI_RATE_LIMIT_RPM:15}
 
   cors:
     allowed-origins:

@@ -1,5 +1,7 @@
 package com.finalYear.smartClassRoom.controller;
 
+import com.finalYear.smartClassRoom.ai.provider.AIModelProvider;
+import com.finalYear.smartClassRoom.ai.provider.RateLimiterService;
 import com.finalYear.smartClassRoom.dto.request.AIQueryRequest;
 import com.finalYear.smartClassRoom.dto.response.AIQueryResponse;
 import com.finalYear.smartClassRoom.dto.response.AISessionResponse;
@@ -9,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -24,25 +27,85 @@ import java.util.Map;
 public class AIController {
 
     private final AIService aiService;
+    private final AIModelProvider aiModelProvider;
+    private final RateLimiterService rateLimiterService;
 
-    // ── Simple chat endpoint (matches the prompt spec: POST /api/ai/chat) ────
+    // ── Simple chat endpoint (POST /api/ai/chat) ──────────────────────────────
     @PostMapping("/chat")
     public ResponseEntity<Map<String, Object>> chat(@RequestBody Map<String, String> body) {
         String question = body.getOrDefault("question", body.getOrDefault("prompt", ""));
         if (question.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Question is required"));
         }
-        // Resolve userId from current authentication
+
         Long userId = resolveCurrentUserId();
+        String userKey = "user_" + userId;
+
+        // Per-user rate limiting to protect free-tier quotas
+        if (!rateLimiterService.tryAcquire(userKey)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of(
+                    "error", "Too Many Requests",
+                    "message", "Free-tier rate limit exceeded (15 requests/minute). Please wait a moment and try again.",
+                    "answer", "AI service is currently rate-limited. Please wait a minute before asking again.",
+                    "remainingRequests", 0
+            ));
+        }
+
         AIQueryRequest request = new AIQueryRequest();
         request.setPrompt(question);
         request.setQueryType(com.finalYear.smartClassRoom.entity.AIQuery.QueryType.GENERAL);
 
         AIQueryResponse response = aiService.processQuery(userId, request);
         return ResponseEntity.ok(Map.of(
-            "answer",    response.getResponse(),
-            "sessionId", response.getSessionId(),
-            "queryId",   response.getId()
+                "answer", response.getResponse(),
+                "sessionId", response.getSessionId() != null ? response.getSessionId() : 1L,
+                "queryId", response.getId() != null ? response.getId() : System.currentTimeMillis(),
+                "provider", aiModelProvider.getProviderName(),
+                "remainingRequests", rateLimiterService.getRemainingRequests(userKey)
+        ));
+    }
+
+    // ── Minimal Test & Verification Endpoint (POST /api/ai/test) ──────────────
+    @PostMapping("/test")
+    public ResponseEntity<Map<String, Object>> testModel(@RequestBody(required = false) Map<String, String> body) {
+        String prompt = (body != null && body.containsKey("prompt"))
+                ? body.get("prompt")
+                : "Hello! In 5 words, confirm you are operational.";
+
+        Long userId = resolveCurrentUserId();
+        String userKey = "test_" + userId;
+
+        if (!rateLimiterService.tryAcquire(userKey)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of(
+                    "error", "Rate limit exceeded for test endpoint. Please wait a minute."
+            ));
+        }
+
+        long start = System.currentTimeMillis();
+        String answer = aiModelProvider.generateResponse("You are a test validator.", prompt);
+        long elapsed = System.currentTimeMillis() - start;
+
+        return ResponseEntity.ok(Map.of(
+                "status", "SUCCESS",
+                "provider", aiModelProvider.getProviderName(),
+                "model", aiModelProvider.getModelName(),
+                "prompt", prompt,
+                "response", answer,
+                "responseTimeMs", elapsed
+        ));
+    }
+
+    // ── Provider Health / Status (GET /api/ai/provider-status) ────────────────
+    @GetMapping("/provider-status")
+    public ResponseEntity<Map<String, Object>> getProviderStatus() {
+        Long userId = resolveCurrentUserId();
+        String userKey = "user_" + userId;
+
+        return ResponseEntity.ok(Map.of(
+                "provider", aiModelProvider.getProviderName(),
+                "model", aiModelProvider.getModelName(),
+                "available", aiModelProvider.isAvailable(),
+                "remainingRequestsThisMinute", rateLimiterService.getRemainingRequests(userKey)
         ));
     }
 
@@ -51,8 +114,12 @@ public class AIController {
             @PathVariable Long userId,
             @Valid @RequestBody AIQueryRequest request) {
 
-        AIQueryResponse response = aiService.processQuery(userId, request);
+        String userKey = "user_" + userId;
+        if (!rateLimiterService.tryAcquire(userKey)) {
+            throw new RuntimeException("Rate limit reached. Please wait a minute before making another query.");
+        }
 
+        AIQueryResponse response = aiService.processQuery(userId, request);
         log.info("Question : {}", request.getPrompt());
         log.info("AI Answer: {}", response.getResponse());
 
@@ -90,6 +157,6 @@ public class AIController {
                 return user.getId();
             }
         } catch (Exception ignored) {}
-        return 27L; // fallback
+        return 27L; // default fallback ID
     }
 }
