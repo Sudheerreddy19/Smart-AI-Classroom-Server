@@ -19,6 +19,12 @@ public class CorsConfig {
                 "http://localhost:3000",
                 "http://localhost:5173",
                 "http://127.0.0.1:5173",
+                "http://localhost:4173",
+                "http://127.0.0.1:4173",
+                // Kiosk / admin portals on Render, Netlify, Vercel, Railway
+                "https://*.onrender.com",
+                "https://*.netlify.app",
+                "https://*.vercel.app",
                 "https://*.up.railway.app",
                 "https://*.railway.app"
         ));

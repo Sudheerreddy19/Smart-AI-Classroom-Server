@@ -67,6 +67,24 @@ public class SecurityConfig {
                 .requestMatchers("/api/environment/ingest", "/api/iot/telemetry").permitAll()
                 .requestMatchers("/api/ai/provider-status", "/api/ai/test").permitAll()
 
+                // ── Kiosk: Classroom display (always-on screen, no login required) ──────
+                // Physical classroom display reads live data without any JWT token.
+                // Only aggregate/anonymous data is exposed — no PII sent to client or AI.
+                .requestMatchers(HttpMethod.GET, "/api/dashboard/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/environment/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/sensors/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/devices/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/timetables/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/classrooms/**").permitAll()
+                // AI / JARVIS endpoints — kiosk voice assistant works without login
+                .requestMatchers(HttpMethod.POST, "/api/ai/chat").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/ai/**").permitAll()
+                .requestMatchers("/api/ai/sessions/**").permitAll()
+                .requestMatchers("/api/ai/tools/**").permitAll()
+                // Knowledge base read (RAG search) — public for kiosk Q&A
+                .requestMatchers(HttpMethod.GET, "/api/knowledge/documents").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/knowledge/search").permitAll()
+
                 // ── SUPER_ADMIN only ──────────────────────────────────────────
                 .requestMatchers("/api/super-admin/**")
                     .hasRole("SUPER_ADMIN")
@@ -167,27 +185,27 @@ public class SecurityConfig {
                     .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD")
 
                 // ── Devices ───────────────────────────────────────────────────
-                .requestMatchers(HttpMethod.GET, "/api/devices/**")
-                    .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER", "STUDENT")
+                // Note: GET /api/devices/** is NOT listed here — it's already permitAll above
                 .requestMatchers("/api/devices/*/control")
                     .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER")
                 .requestMatchers("/api/devices/**")
                     .hasAnyRole("SUPER_ADMIN", "ADMIN")
 
                 // ── Environment ───────────────────────────────────────────────
-                .requestMatchers(HttpMethod.GET, "/api/environment/**")
-                    .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER", "STUDENT")
+                // Note: GET /api/environment/** is NOT listed here — it's already permitAll above
 
                 // ── Notifications ─────────────────────────────────────────────
                 .requestMatchers("/api/notifications/**")
                     .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER", "STUDENT")
 
                 // ── Dashboard ─────────────────────────────────────────────────
+                // Note: GET /api/dashboard/** is already permitAll above for kiosk
                 .requestMatchers("/api/dashboard/**")
                     .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER", "STUDENT")
 
                 // ── AI ────────────────────────────────────────────────────────
-                    .requestMatchers("/api/ai/**").authenticated()
+                // Note: /api/ai/chat (POST) and GET /api/ai/** are already permitAll above
+                .requestMatchers("/api/ai/**").authenticated()
 
                 // ── Knowledge Base (RAG) ──────────────────────────────────────
                 .requestMatchers(HttpMethod.POST, "/api/knowledge/upload")
@@ -197,9 +215,6 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/knowledge/documents/*/reindex")
                     .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER")
                 .requestMatchers("/api/knowledge/**").authenticated()
-
-
-
 
                 // ── Live Bus Tracking: Strictly restricted to STUDENT role ──
                 .requestMatchers("/api/bus-tracking/**")
