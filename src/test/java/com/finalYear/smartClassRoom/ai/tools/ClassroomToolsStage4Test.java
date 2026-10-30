@@ -7,6 +7,7 @@ import com.finalYear.smartClassRoom.ai.model.AgentResponse;
 import com.finalYear.smartClassRoom.entity.*;
 import com.finalYear.smartClassRoom.repository.*;
 import com.finalYear.smartClassRoom.service.AuditLogService;
+import com.finalYear.smartClassRoom.service.DeviceOverrideService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,6 +51,12 @@ public class ClassroomToolsStage4Test {
     @Mock
     private UserRepository userRepository;
 
+    @Mock
+    private DeviceCommandRepository deviceCommandRepository;
+
+    @Mock
+    private DeviceOverrideService deviceOverrideService;
+
     private ClassroomToolsService toolsService;
     private ClassroomToolDefinitions toolDefinitions;
     private ClassroomToolDispatcher toolDispatcher;
@@ -62,6 +69,20 @@ public class ClassroomToolsStage4Test {
 
     @BeforeEach
     void setUp() {
+        lenient().when(deviceOverrideService.setOverride(any(), any(), any(), any(), any(), anyInt()))
+                .thenAnswer(inv -> DeviceOverride.builder()
+                        .classroom(inv.getArgument(0))
+                        .deviceType(inv.getArgument(1))
+                        .forcedState(inv.getArgument(2))
+                        .setBy(inv.getArgument(3))
+                        .reason(inv.getArgument(4))
+                        .setAt(LocalDateTime.now())
+                        .expiresAt(LocalDateTime.now().plusHours(1))
+                        .active(true)
+                        .build());
+        lenient().when(deviceCommandRepository.save(any(DeviceCommand.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
         toolsService = new ClassroomToolsService(
                 environmentDataRepository,
                 deviceRepository,
@@ -69,7 +90,9 @@ public class ClassroomToolsStage4Test {
                 timetableRepository,
                 attendanceSessionRepository,
                 auditLogService,
-                userRepository
+                userRepository,
+                deviceCommandRepository,
+                deviceOverrideService
         );
 
         toolDefinitions = new ClassroomToolDefinitions();
