@@ -33,6 +33,8 @@ public class ClassroomToolsService {
     private final AttendanceSessionRepository attendanceSessionRepository;
     private final AuditLogService auditLogService;
     private final UserRepository userRepository;
+    private final DeviceCommandRepository deviceCommandRepository;
+    private final com.finalYear.smartClassRoom.service.DeviceOverrideService deviceOverrideService;
 
     // ── 1. getCurrentSensorReadings ───────────────────────────────────────────
     @Transactional(readOnly = true)
@@ -68,6 +70,17 @@ public class ClassroomToolsService {
         data.put("fanStatus", latest.getFanStatus() != null ? latest.getFanStatus() : "OFF");
         data.put("lightStatus", latest.getLightStatus() != null ? latest.getLightStatus() : "OFF");
         data.put("recordedAt", latest.getRecordedAt() != null ? latest.getRecordedAt().toString() : "N/A");
+
+        // Stale-data verification: >10 minutes marked as STALE
+        boolean isStale = false;
+        long ageMinutes = 0;
+        if (latest.getRecordedAt() != null) {
+            ageMinutes = java.time.Duration.between(latest.getRecordedAt(), LocalDateTime.now()).toMinutes();
+            isStale = ageMinutes > 10;
+        }
+        data.put("isStale", isStale);
+        data.put("ageMinutes", ageMinutes);
+        data.put("freshness", isStale ? "STALE" : "FRESH");
 
         return data;
     }
@@ -154,6 +167,16 @@ public class ClassroomToolsService {
             result.put("teacher", slot.getTeacher() != null ? slot.getTeacher().getUser().getFirstName() + " " + slot.getTeacher().getUser().getLastName() : "Faculty");
             result.put("startTime", slot.getStartTime().toString());
             result.put("endTime", slot.getEndTime().toString());
+
+            // Check if teacher has initiated/conducted attendance session for this slot today
+            List<AttendanceSession> todaySessions = attendanceSessionRepository.findByClassroom(classroom);
+            boolean teacherPresent = todaySessions.stream().anyMatch(s ->
+                    today.equals(s.getSessionDate()) &&
+                    slot.getSubject() != null &&
+                    slot.getSubject().equals(s.getSubject())
+            );
+            result.put("teacherPresent", teacherPresent);
+            result.put("attendanceSessionActive", teacherPresent);
         } else {
             result.put("status", "NO_ACTIVE_CLASS");
             result.put("message", "No class is currently in session for " + classroom.getRoomNumber());
@@ -399,16 +422,45 @@ public class ClassroomToolsService {
             environmentDataRepository.save(latest);
         }
 
-        // E. Audit Log Action
-        String auditDetails = String.format("User %s (%s) set %s to %s in %s. Devices affected: %d. Previous state: %s, New state: %s.",
-                user.getEmail(), user.getRole(), targetNorm, actionNorm, classroom.getRoomNumber(), affectedCount, previousState, actionNorm);
+        // E. Record Command Lifecycle & Establish Durable Teacher Override
+        String commandUuid = UUID.randomUUID().toString();
+        LocalDateTime now = LocalDateTime.now();
+
+        DeviceCommand cmd = DeviceCommand.builder()
+                .commandId(commandUuid)
+                .classroom(classroom)
+                .targetType(targetNorm)
+                .action(actionNorm)
+                .issuedBy(user.getEmail())
+                .reason(String.format("Teacher control via AI tool: %s -> %s", targetNorm, actionNorm))
+                .status(affectedCount > 0 ? DeviceCommand.CommandStatus.ACKNOWLEDGED : DeviceCommand.CommandStatus.FAILED)
+                .issuedAt(now)
+                .dispatchedAt(now)
+                .acknowledgedAt(affectedCount > 0 ? now : null)
+                .build();
+        deviceCommandRepository.save(cmd);
+
+        // Durable Override (default 60 minutes) to prevent sensor automation flapping
+        DeviceOverride override = deviceOverrideService.setOverride(
+                classroom, targetNorm, actionNorm, user.getEmail(), "Manual control via JARVIS tools", 60);
+
+        // F. Audit Log Action
+        String auditDetails = String.format("User %s (%s) set %s to %s in %s. Devices affected: %d. Command: %s. Override until: %s.",
+                user.getEmail(), user.getRole(), targetNorm, actionNorm, classroom.getRoomNumber(), affectedCount, commandUuid, override.getExpiresAt());
 
         auditLogService.log("AI_DEVICE_CONTROL", "Classroom", classroom.getId(), auditDetails);
 
         Map<String, Object> success = new LinkedHashMap<>();
         success.put("status", "SUCCESS");
         success.put("executed", true);
-        success.put("message", String.format("Successfully turned %s %s in %s.", actionNorm, targetNorm, classroom.getRoomNumber()));
+        success.put("verified", affectedCount > 0);
+        success.put("verificationStatus", affectedCount > 0 ? "ACKNOWLEDGED" : "NO_DEVICES_MATCHED");
+        success.put("commandId", commandUuid);
+        success.put("commandStatus", cmd.getStatus().name());
+        success.put("overrideActive", true);
+        success.put("overrideExpiresAt", override.getExpiresAt().toString());
+        success.put("message", String.format("Successfully turned %s %s in %s (Override active until %s).",
+                actionNorm, targetNorm, classroom.getRoomNumber(), override.getExpiresAt().toLocalTime().toString()));
         success.put("target", targetNorm);
         success.put("action", actionNorm);
         success.put("classroomId", classroom.getId());
@@ -417,7 +469,7 @@ public class ClassroomToolsService {
         success.put("previousState", previousState);
         success.put("newState", actionNorm);
         success.put("safetyWarnings", safetyWarnings);
-        success.put("timestamp", LocalDateTime.now().toString());
+        success.put("timestamp", now.toString());
 
         return success;
     }

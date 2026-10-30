@@ -17,8 +17,7 @@ import java.util.Map;
 
 /**
  * Controller exposing JARVIS Live Classroom Tools.
- * Authenticated endpoints for querying real-time sensors, devices, timetable,
- * privacy-safe attendance aggregates, and authorized control.
+ * Supports both query-parameter and path-variable bindings for maximum frontend interoperability.
  */
 @RestController
 @RequestMapping("/api/ai/tools")
@@ -36,37 +35,47 @@ public class ClassroomToolsController {
         return ResponseEntity.ok(dispatcher.getToolDefinitions());
     }
 
-    @GetMapping("/sensors")
+    @GetMapping(value = {"/sensors", "/sensors/{classroomId}"})
     public ResponseEntity<Map<String, Object>> getSensorReadings(
-            @RequestParam(required = false) Long classroomId) {
-        return ResponseEntity.ok(toolsService.getCurrentSensorReadings(classroomId));
+            @PathVariable(required = false) Long classroomId,
+            @RequestParam(required = false) Long queryClassroomId) {
+        Long id = classroomId != null ? classroomId : queryClassroomId;
+        return ResponseEntity.ok(toolsService.getCurrentSensorReadings(id));
     }
 
-    @GetMapping("/devices")
+    @GetMapping(value = {"/devices", "/devices/{classroomId}"})
     public ResponseEntity<Map<String, Object>> getDeviceStatus(
-            @RequestParam(required = false) Long classroomId,
+            @PathVariable(required = false) Long classroomId,
+            @RequestParam(required = false) Long queryClassroomId,
             @RequestParam(required = false) String deviceId) {
-        return ResponseEntity.ok(toolsService.getDeviceStatus(classroomId, deviceId));
+        Long id = classroomId != null ? classroomId : queryClassroomId;
+        return ResponseEntity.ok(toolsService.getDeviceStatus(id, deviceId));
     }
 
-    @GetMapping("/current-timetable")
+    @GetMapping(value = {"/current-timetable", "/timetable", "/timetable/{classroomId}"})
     public ResponseEntity<Map<String, Object>> getCurrentTimetable(
-            @RequestParam(required = false) Long classroomId) {
-        return ResponseEntity.ok(toolsService.getCurrentTimetable(classroomId));
+            @PathVariable(required = false) Long classroomId,
+            @RequestParam(required = false) Long queryClassroomId) {
+        Long id = classroomId != null ? classroomId : queryClassroomId;
+        return ResponseEntity.ok(toolsService.getCurrentTimetable(id));
     }
 
-    @GetMapping("/upcoming-classes")
+    @GetMapping(value = {"/upcoming-classes", "/upcoming-classes/{classroomId}"})
     public ResponseEntity<Map<String, Object>> getUpcomingClasses(
-            @RequestParam(required = false) Long classroomId,
+            @PathVariable(required = false) Long classroomId,
+            @RequestParam(required = false) Long queryClassroomId,
             @RequestParam(defaultValue = "5") Integer limit) {
-        return ResponseEntity.ok(toolsService.getUpcomingClasses(classroomId, limit));
+        Long id = classroomId != null ? classroomId : queryClassroomId;
+        return ResponseEntity.ok(toolsService.getUpcomingClasses(id, limit));
     }
 
-    @GetMapping("/attendance-summary")
+    @GetMapping(value = {"/attendance-summary", "/attendance", "/attendance/{classroomId}"})
     public ResponseEntity<Map<String, Object>> getAttendanceSummary(
-            @RequestParam(required = false) Long classroomId,
+            @PathVariable(required = false) Long classroomId,
+            @RequestParam(required = false) Long queryClassroomId,
             @RequestParam(required = false) String date) {
-        return ResponseEntity.ok(toolsService.getAttendanceSummary(classroomId, date));
+        Long id = classroomId != null ? classroomId : queryClassroomId;
+        return ResponseEntity.ok(toolsService.getAttendanceSummary(id, date));
     }
 
     @PostMapping("/control")
@@ -98,11 +107,17 @@ public class ClassroomToolsController {
         return ResponseEntity.ok(result);
     }
 
+    // ── Helpers ───────────────────────────────────────────────────────────────
     private User resolveCurrentUser() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth != null && auth.isAuthenticated() && !auth.getName().equals("anonymousUser")) {
-            return userRepository.findByEmail(auth.getName()).orElse(null);
-        }
+        try {
+            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+            if (auth != null && auth.getPrincipal() instanceof User u) {
+                return u;
+            }
+            if (auth != null && auth.getName() != null && !auth.getName().equals("anonymousUser")) {
+                return userRepository.findByEmail(auth.getName()).orElse(null);
+            }
+        } catch (Exception ignored) {}
         return null;
     }
 

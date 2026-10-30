@@ -86,6 +86,12 @@ app:
       temperature: 0.7
     rate-limit:
       requests-per-minute: ${AI_RATE_LIMIT_RPM:15}
+    automation:
+      temperature-threshold: ${AUTOMATION_TEMP_THRESHOLD:24.0}
+      light-threshold: ${AUTOMATION_LIGHT_THRESHOLD:1700.0}
+      cooldown-seconds: ${AUTOMATION_COOLDOWN_SECONDS:180}
+      inactivity-seconds: ${AUTOMATION_INACTIVITY_SECONDS:300}
+      max-freshness-seconds: ${AUTOMATION_FRESHNESS_SECONDS:600}
 
   cors:
     allowed-origins:

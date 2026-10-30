@@ -1,11 +1,14 @@
 package com.finalYear.smartClassRoom.controller;
 
+import com.finalYear.smartClassRoom.ai.decision.AutomationDecisionResult;
+import com.finalYear.smartClassRoom.ai.decision.ClassroomAutomationEngine;
 import com.finalYear.smartClassRoom.dto.response.EnvironmentResponse;
 import com.finalYear.smartClassRoom.entity.Classroom;
 import com.finalYear.smartClassRoom.entity.EnvironmentData;
 import com.finalYear.smartClassRoom.repository.ClassroomRepository;
 import com.finalYear.smartClassRoom.repository.EnvironmentDataRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,10 +19,13 @@ import java.util.stream.Collectors;
 @RequestMapping("/api/environment")
 @RequiredArgsConstructor
 @CrossOrigin(origins = "*")
+@Slf4j
 public class EnvironmentController {
 
     private final EnvironmentDataRepository environmentDataRepository;
     private final ClassroomRepository classroomRepository;
+    private final ClassroomAutomationEngine automationEngine;
+    private final com.finalYear.smartClassRoom.service.DeviceOverrideService deviceOverrideService;
 
     /** Latest reading for every classroom */
     @GetMapping("/latest")
@@ -73,7 +79,7 @@ public class EnvironmentController {
 
     // ── IoT data ingestion (called by ESP32 / Arduino hardware) ───────────────
     @PostMapping(value = {"/ingest", "/telemetry"})
-    public ResponseEntity<String> ingest(@RequestBody EnvironmentIngestRequest req) {
+    public ResponseEntity<TelemetryIngestResponse> ingest(@RequestBody EnvironmentIngestRequest req) {
         Classroom classroom = null;
         if (req.classroomId() != null) {
             classroom = classroomRepository.findById(req.classroomId()).orElse(null);
@@ -90,10 +96,17 @@ public class EnvironmentController {
         }
 
         if (classroom == null) {
-            return ResponseEntity.badRequest().body("No active classroom found to associate sensor data with.");
+            return ResponseEntity.badRequest().body(new TelemetryIngestResponse(
+                    "ERROR: No active classroom found", null, "OFF", "OFF", false, java.util.Collections.emptyList()));
         }
 
         Double light = req.lightIntensity() != null ? req.lightIntensity() : req.lightLevel();
+        Boolean motion = req.motionDetected() != null
+                ? req.motionDetected()
+                : "ACTIVE".equalsIgnoreCase(req.roomState());
+        Integer ldr = req.ldrRaw() != null
+                ? req.ldrRaw()
+                : (light != null ? light.intValue() : null);
 
         EnvironmentData data = EnvironmentData.builder()
                 .classroom(classroom)
@@ -109,10 +122,71 @@ public class EnvironmentController {
                 .gasPpm(req.gasPpm())
                 .fanStatus(req.fanStatus())
                 .lightStatus(req.lightStatus())
+                .ldrRaw(ldr)
+                .motionDetected(motion)
                 .build();
 
-        environmentDataRepository.save(data);
-        return ResponseEntity.ok("Telemetry received and stored successfully.");
+        EnvironmentData saved = environmentDataRepository.save(data);
+
+        // ── Autonomous Sensor-Driven Automation Evaluation ────────────────────
+        List<AutomationDecisionResult> decisions = java.util.Collections.emptyList();
+        try {
+            if (automationEngine != null) {
+                decisions = automationEngine.evaluateTelemetry(classroom, saved);
+            }
+        } catch (Exception e) {
+            log.error("ClassroomAutomationEngine evaluation failed for classroom {}: {}",
+                    classroom.getId(), e.getMessage(), e);
+        }
+
+        String activeFan = saved.getFanStatus() != null ? saved.getFanStatus() : "OFF";
+        String activeLight = saved.getLightStatus() != null ? saved.getLightStatus() : "OFF";
+        boolean gasEmergency = Boolean.TRUE.equals(saved.getGasLeak())
+                || (saved.getGasPpm() != null && saved.getGasPpm() > 400.0);
+
+        return ResponseEntity.ok(new TelemetryIngestResponse(
+                "SUCCESS",
+                classroom.getId(),
+                activeFan,
+                activeLight,
+                gasEmergency,
+                decisions
+        ));
+    }
+
+    /**
+     * Inspect or manually trigger decision engine evaluation for a classroom.
+     */
+    @PostMapping("/evaluate/{classroomId}")
+    public ResponseEntity<List<AutomationDecisionResult>> evaluateNow(@PathVariable Long classroomId) {
+        Classroom classroom = classroomRepository.findById(classroomId)
+                .orElseThrow(() -> new com.finalYear.smartClassRoom.exception
+                        .ResourceNotFoundException("Classroom", classroomId));
+        EnvironmentData data = environmentDataRepository.findTopByClassroomOrderByRecordedAtDesc(classroom);
+        if (data == null) {
+            return ResponseEntity.ok(List.of());
+        }
+        return ResponseEntity.ok(automationEngine.evaluateTelemetry(classroom, data));
+    }
+
+    /**
+     * Get active durable teacher manual overrides for a classroom.
+     */
+    @GetMapping("/overrides/{classroomId}")
+    public ResponseEntity<List<com.finalYear.smartClassRoom.entity.DeviceOverride>> getActiveOverrides(@PathVariable Long classroomId) {
+        Classroom classroom = classroomRepository.findById(classroomId)
+                .orElseThrow(() -> new com.finalYear.smartClassRoom.exception
+                        .ResourceNotFoundException("Classroom", classroomId));
+        return ResponseEntity.ok(deviceOverrideService.getActiveOverrides(classroom));
+    }
+
+    /**
+     * Clear / cancel a manual override (teachers/admins only).
+     */
+    @DeleteMapping("/overrides/{overrideId}")
+    public ResponseEntity<String> clearOverride(@PathVariable Long overrideId) {
+        deviceOverrideService.clearOverride(overrideId);
+        return ResponseEntity.ok("Override cancelled successfully.");
     }
 
     // ── Helper ────────────────────────────────────────────────────────────────
@@ -164,6 +238,18 @@ public class EnvironmentController {
             Boolean gasLeak,        // true / false
             Double gasPpm,          // Gas sensor value
             String fanStatus,       // "ON" or "OFF"
-            String lightStatus      // "ON" or "OFF"
+            String lightStatus,     // "ON" or "OFF"
+            Integer ldrRaw,         // Raw LDR ADC value
+            Boolean motionDetected  // PIR sensor direct boolean
+    ) {}
+
+    // ── Record for response payload sent back to ESP32 for actuation ──────────
+    public record TelemetryIngestResponse(
+            String status,
+            Long classroomId,
+            String fanStatus,       // "ON" or "OFF" -> sets fan relay
+            String lightStatus,     // "ON" or "OFF" -> sets light relay
+            boolean gasEmergency,   // true if gas leak detected
+            List<AutomationDecisionResult> decisions
     ) {}
 }

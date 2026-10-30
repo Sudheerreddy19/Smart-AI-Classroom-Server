@@ -4,9 +4,11 @@ import com.finalYear.smartClassRoom.dto.request.DeviceRequest;
 import com.finalYear.smartClassRoom.dto.response.DeviceResponse;
 import com.finalYear.smartClassRoom.entity.Classroom;
 import com.finalYear.smartClassRoom.entity.Device;
+import com.finalYear.smartClassRoom.entity.DeviceCommand;
 import com.finalYear.smartClassRoom.exception.DuplicateResourceException;
 import com.finalYear.smartClassRoom.exception.ResourceNotFoundException;
 import com.finalYear.smartClassRoom.repository.ClassroomRepository;
+import com.finalYear.smartClassRoom.repository.DeviceCommandRepository;
 import com.finalYear.smartClassRoom.repository.DeviceRepository;
 import com.finalYear.smartClassRoom.service.DeviceService;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -25,6 +28,7 @@ public class DeviceServiceImpl implements DeviceService {
 
     private final DeviceRepository deviceRepository;
     private final ClassroomRepository classroomRepository;
+    private final DeviceCommandRepository deviceCommandRepository;
 
     @Override
     @Transactional
@@ -138,6 +142,25 @@ public class DeviceServiceImpl implements DeviceService {
         }
 
         deviceRepository.save(device);
+
+        // Command lifecycle tracking
+        if (device.getClassroom() != null) {
+            LocalDateTime now = LocalDateTime.now();
+            DeviceCommand cmd = DeviceCommand.builder()
+                    .commandId(UUID.randomUUID().toString())
+                    .classroom(device.getClassroom())
+                    .targetType(device.getDeviceType() != null ? device.getDeviceType().name() : "DEVICE")
+                    .targetDeviceId(deviceId)
+                    .action(upperAction)
+                    .issuedBy("DIRECT_DEVICE_API")
+                    .reason("Direct control via /api/devices/{id}/control")
+                    .status(DeviceCommand.CommandStatus.ACKNOWLEDGED)
+                    .issuedAt(now)
+                    .dispatchedAt(now)
+                    .acknowledgedAt(now)
+                    .build();
+            deviceCommandRepository.save(cmd);
+        }
 
         log.info("Device {} action {}", deviceId, action);
     }

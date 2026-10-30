@@ -72,6 +72,7 @@ public class SecurityConfig {
                 // Only aggregate/anonymous data is exposed — no PII sent to client or AI.
                 .requestMatchers(HttpMethod.GET, "/api/dashboard/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/environment/**").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/environment/evaluate/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/sensors/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/devices/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/timetables/**").permitAll()

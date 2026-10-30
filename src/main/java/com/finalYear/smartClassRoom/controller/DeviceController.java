@@ -2,6 +2,11 @@ package com.finalYear.smartClassRoom.controller;
 
 import com.finalYear.smartClassRoom.dto.request.DeviceRequest;
 import com.finalYear.smartClassRoom.dto.response.DeviceResponse;
+import com.finalYear.smartClassRoom.entity.Classroom;
+import com.finalYear.smartClassRoom.entity.DeviceCommand;
+import com.finalYear.smartClassRoom.exception.ResourceNotFoundException;
+import com.finalYear.smartClassRoom.repository.ClassroomRepository;
+import com.finalYear.smartClassRoom.repository.DeviceCommandRepository;
 import com.finalYear.smartClassRoom.service.DeviceService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -18,6 +23,8 @@ import java.util.List;
 public class DeviceController {
 
     private final DeviceService deviceService;
+    private final DeviceCommandRepository deviceCommandRepository;
+    private final ClassroomRepository classroomRepository;
 
     @PostMapping
     public ResponseEntity<DeviceResponse> registerDevice(
@@ -57,6 +64,13 @@ public class DeviceController {
 
         return ResponseEntity.ok(
                 deviceService.getByClassroom(classroomId));
+    }
+
+    @GetMapping("/commands/{classroomId}")
+    public ResponseEntity<List<DeviceCommand>> getDeviceCommands(@PathVariable Long classroomId) {
+        Classroom classroom = classroomRepository.findById(classroomId)
+                .orElseThrow(() -> new ResourceNotFoundException("Classroom", classroomId));
+        return ResponseEntity.ok(deviceCommandRepository.findByClassroomOrderByIssuedAtDesc(classroom));
     }
 
     @PostMapping("/{deviceId}/control")
