@@ -27,53 +27,58 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Spring Boot Decision Engine — Sensor-Based Automation.
  *
- * Implements deterministic classroom automation based on real-time ESP32 sensor telemetry:
- * - Policy 1: Temperature-based Fan Control (>24.0°C -> ON, <=24.0°C -> OFF)
- * - Policy 2: Light-intensity-based Light Control (<=1700.0 -> ON, >1700.0 -> OFF)
- * - Policy 3: Sensor Data Freshness validation (Missing/stale/out-of-range -> INSUFFICIENT_DATA)
- * - Policy 4: Anti-Flapping & Cooldown (3-minute cooldown between state changes, no repeat commands)
- * - Policy 5: Durable Manual Overrides (Teacher overrides block automated toggles until expiration)
- * - Policy 6: Occupancy Safety Gate (PIR inactivity alone must NEVER establish empty; UNKNOWN never treated as EMPTY)
- * - Policy 7: Emergency Protection & Spark Prevention (Gas leak alerts without arcing relay switches)
- * - Policy 8: Command Lifecycle Tracking (CREATED -> DISPATCHED -> ACKNOWLEDGED)
+ * Automation Priority Order (highest to lowest):
+ *   1. Gas Emergency Protection  — blocks relay switching to prevent arcing
+ *   2. Data Freshness Gate       — skips control on stale/missing readings
+ *   3. PIR Vacancy Override      — 60-second timer forces FAN+LIGHT OFF; blocks temp/LDR automation
+ *   4. Temperature Fan Policy    — temp > 24.0°C → ON; ≤ 24.0°C → OFF (immediate, no cooldown)
+ *   5. LDR Light Policy          — LDR ≤ 1700 → ON; > 1700 → OFF (immediate, no cooldown)
+ *
+ * Teacher overrides (durable, persisted) block policies 4 and 5.
+ * PIR vacancy state (OCCUPIED / COUNTDOWN / VACANT) is held in-memory per classroom.
  */
 @Service
 @Slf4j
 public class ClassroomAutomationEngine {
 
+    // ── Occupancy state enum ───────────────────────────────────────────────────
+    public enum OccupancyState { OCCUPIED, COUNTDOWN, VACANT }
+
+    /** Per-classroom occupancy tracking record. */
+    private static class OccupancyTracker {
+        OccupancyState state = OccupancyState.OCCUPIED; // default: assume occupied at startup
+        Instant vacancyStarted = null;                  // set when countdown begins
+
+        OccupancyTracker() {}
+    }
+
+    // ── Dependencies ──────────────────────────────────────────────────────────
     private final DeviceRepository deviceRepository;
     private final EnvironmentDataRepository environmentDataRepository;
     private final DeviceCommandRepository deviceCommandRepository;
     private final DeviceOverrideService deviceOverrideService;
     private final AuditLogService auditLogService;
 
-    // Configurable thresholds with verified defaults
-    @Getter @Setter
-    private double temperatureThreshold;
+    // ── Configurable thresholds ───────────────────────────────────────────────
+    @Getter @Setter private double temperatureThreshold;
+    @Getter @Setter private double lightIntensityThreshold;
+    @Getter @Setter private long cooldownSeconds;       // kept for backward-compat; effectively 0
+    @Getter @Setter private long inactivitySeconds;
+    @Getter @Setter private long maxFreshnessSeconds;
+    @Getter @Setter private long vacancyTimeoutSeconds; // seconds of no-motion before VACANT
 
-    @Getter @Setter
-    private double lightIntensityThreshold;
-
-    @Getter @Setter
-    private long cooldownSeconds;
-
-    @Getter @Setter
-    private long inactivitySeconds;
-
-    @Getter @Setter
-    private long maxFreshnessSeconds;
-
-    // Clock instance to allow deterministic time simulation in unit tests
+    // ── Clock (overridable for deterministic unit tests) ──────────────────────
     @Setter
     private Clock clock = Clock.systemDefaultZone();
 
-    // In-memory anti-flapping trackers
-    // Key: "{classroomId}_{deviceType}" -> Instant of last successful state change
+    // ── In-memory state maps ──────────────────────────────────────────────────
+    /** Key: "{classroomId}_{deviceType}" → Instant of last state change (anti-flapping) */
     private final Map<String, Instant> lastStateChangeMap = new ConcurrentHashMap<>();
 
-    // Key: classroomId -> Instant of last confirmed PIR motion
-    private final Map<Long, Instant> lastMotionDetectedMap = new ConcurrentHashMap<>();
+    /** Key: classroomId → OccupancyTracker */
+    private final Map<Long, OccupancyTracker> occupancyTrackerMap = new ConcurrentHashMap<>();
 
+    // ── Constructor ───────────────────────────────────────────────────────────
     public ClassroomAutomationEngine(
             DeviceRepository deviceRepository,
             EnvironmentDataRepository environmentDataRepository,
@@ -82,9 +87,10 @@ public class ClassroomAutomationEngine {
             AuditLogService auditLogService,
             @Value("${app.automation.temperature-threshold:24.0}") double temperatureThreshold,
             @Value("${app.automation.light-threshold:1700.0}") double lightIntensityThreshold,
-            @Value("${app.automation.cooldown-seconds:180}") long cooldownSeconds,
-            @Value("${app.automation.inactivity-seconds:300}") long inactivitySeconds,
-            @Value("${app.automation.max-freshness-seconds:600}") long maxFreshnessSeconds) {
+            @Value("${app.automation.cooldown-seconds:0}") long cooldownSeconds,
+            @Value("${app.automation.inactivity-seconds:60}") long inactivitySeconds,
+            @Value("${app.automation.max-freshness-seconds:600}") long maxFreshnessSeconds,
+            @Value("${app.automation.vacancy-timeout-seconds:60}") long vacancyTimeoutSeconds) {
         this.deviceRepository = deviceRepository;
         this.environmentDataRepository = environmentDataRepository;
         this.deviceCommandRepository = deviceCommandRepository;
@@ -95,11 +101,39 @@ public class ClassroomAutomationEngine {
         this.cooldownSeconds = cooldownSeconds;
         this.inactivitySeconds = inactivitySeconds;
         this.maxFreshnessSeconds = maxFreshnessSeconds;
+        this.vacancyTimeoutSeconds = vacancyTimeoutSeconds;
+    }
+
+    // ── Public occupancy query methods (for dashboard / controller) ───────────
+
+    /**
+     * Returns "OCCUPIED", "COUNTDOWN", or "VACANT" for the given classroom.
+     * Returns "OCCUPIED" by default if no telemetry has been received yet.
+     */
+    public String getOccupancyStatus(Long classroomId) {
+        OccupancyTracker tracker = occupancyTrackerMap.get(classroomId);
+        if (tracker == null) return "OCCUPIED";
+        return tracker.state.name();
     }
 
     /**
-     * Primary entry point called when new ESP32 telemetry arrives.
-     * Evaluates all policies deterministically and executes required device actions.
+     * Returns seconds remaining in the vacancy countdown, or null if not in COUNTDOWN state.
+     */
+    public Long getVacancyCountdown(Long classroomId) {
+        OccupancyTracker tracker = occupancyTrackerMap.get(classroomId);
+        if (tracker == null || tracker.state != OccupancyState.COUNTDOWN || tracker.vacancyStarted == null) {
+            return null;
+        }
+        long elapsed = Duration.between(tracker.vacancyStarted, clock.instant()).getSeconds();
+        long remaining = vacancyTimeoutSeconds - elapsed;
+        return Math.max(0L, remaining);
+    }
+
+    // ── Primary evaluation entry point ────────────────────────────────────────
+
+    /**
+     * Called on every ESP32 telemetry ingest.
+     * Evaluates all automation policies in priority order.
      */
     @Transactional
     public List<AutomationDecisionResult> evaluateTelemetry(Classroom classroom, EnvironmentData data) {
@@ -111,10 +145,9 @@ public class ClassroomAutomationEngine {
         Long classroomId = classroom.getId();
         Instant now = clock.instant();
         List<AutomationDecisionResult> results = new ArrayList<>();
-
         Map<String, Object> snapshot = buildSnapshot(data);
 
-        // ── Policy 7: Emergency Protection & Spark Prevention ─────────────────
+        // ── PRIORITY 1: Gas Emergency Protection ──────────────────────────────
         boolean gasLeakActive = Boolean.TRUE.equals(data.getGasLeak())
                 || (data.getGasPpm() != null && data.getGasPpm() > 400.0);
 
@@ -137,11 +170,10 @@ public class ClassroomAutomationEngine {
                     LocalDateTime.now(clock),
                     true
             ));
-            // In a gas emergency, do NOT cycle relays (risk of electrical arcing)
-            return results;
+            return results; // Do NOT cycle relays — risk of electrical arcing during gas leak
         }
 
-        // ── Policy 3: Data Freshness Check ────────────────────────────────────
+        // ── PRIORITY 2: Data Freshness Gate ───────────────────────────────────
         LocalDateTime recordedAt = data.getRecordedAt();
         if (recordedAt != null) {
             Duration age = Duration.between(recordedAt.atZone(clock.getZone()).toInstant(), now);
@@ -162,40 +194,148 @@ public class ClassroomAutomationEngine {
                         LocalDateTime.now(clock),
                         false
                 ));
-                return results; // Never issue commands on stale readings
+                return results;
             }
         }
 
-        // ── PIR Motion & Occupancy Update ─────────────────────────────────────
+        // ── PRIORITY 3: PIR Vacancy Timer ─────────────────────────────────────
         boolean motionDetected = Boolean.TRUE.equals(data.getMotionDetected())
                 || "ACTIVE".equalsIgnoreCase(data.getRoomState());
 
+        OccupancyTracker tracker = occupancyTrackerMap.computeIfAbsent(classroomId, id -> new OccupancyTracker());
+
         if (motionDetected) {
-            lastMotionDetectedMap.put(classroomId, now);
+            // Motion detected → classroom is OCCUPIED; reset any countdown
+            if (tracker.state != OccupancyState.OCCUPIED) {
+                log.info("Classroom {} — motion detected, restoring OCCUPIED state (was {})",
+                        classroom.getRoomNumber(), tracker.state);
+                auditLogService.log("PIR_MOTION", "Classroom", classroomId,
+                        "PIR motion detected — classroom marked OCCUPIED, normal automation restored.");
+            }
+            tracker.state = OccupancyState.OCCUPIED;
+            tracker.vacancyStarted = null;
+
+            results.add(new AutomationDecisionResult(
+                    "PIR_OCCUPANCY",
+                    "OCCUPANCY",
+                    "OCCUPIED",
+                    AutomationDecisionStatus.NO_ACTION_REQUIRED,
+                    "OCCUPIED",
+                    "OCCUPIED",
+                    "Motion detected — classroom is OCCUPIED. Normal temp/LDR automation active.",
+                    snapshot,
+                    LocalDateTime.now(clock),
+                    false
+            ));
+
+        } else {
+            // No motion detected
+            if (tracker.state == OccupancyState.OCCUPIED) {
+                // Transition: OCCUPIED → COUNTDOWN
+                tracker.state = OccupancyState.COUNTDOWN;
+                tracker.vacancyStarted = now;
+                log.info("Classroom {} — no motion, starting {}-second vacancy countdown.",
+                        classroom.getRoomNumber(), vacancyTimeoutSeconds);
+                auditLogService.log("PIR_COUNTDOWN_START", "Classroom", classroomId,
+                        String.format("No PIR motion — starting %d-second vacancy countdown.", vacancyTimeoutSeconds));
+            }
+
+            if (tracker.state == OccupancyState.COUNTDOWN) {
+                long elapsed = (tracker.vacancyStarted != null)
+                        ? Duration.between(tracker.vacancyStarted, now).getSeconds()
+                        : vacancyTimeoutSeconds;
+                long remaining = vacancyTimeoutSeconds - elapsed;
+
+                if (remaining > 0) {
+                    // Still in countdown — do NOT turn devices off yet
+                    String countdownMsg = String.format(
+                            "No motion — vacancy countdown: %d/%d seconds elapsed, %d seconds remaining.",
+                            elapsed, vacancyTimeoutSeconds, remaining);
+                    log.debug(countdownMsg);
+                    results.add(new AutomationDecisionResult(
+                            "PIR_OCCUPANCY",
+                            "OCCUPANCY",
+                            "COUNTDOWN",
+                            AutomationDecisionStatus.NO_ACTION_REQUIRED,
+                            "COUNTDOWN",
+                            "COUNTDOWN",
+                            countdownMsg,
+                            snapshot,
+                            LocalDateTime.now(clock),
+                            false
+                    ));
+                    // Continue to normal temp/LDR automation during countdown
+                } else {
+                    // Countdown expired → VACANT
+                    if (tracker.state == OccupancyState.COUNTDOWN) {
+                        tracker.state = OccupancyState.VACANT;
+                        log.info("Classroom {} — vacancy timer expired ({} seconds). Marking VACANT. Turning off FAN and LIGHT.",
+                                classroom.getRoomNumber(), vacancyTimeoutSeconds);
+                        auditLogService.log("PIR_VACANT", "Classroom", classroomId,
+                                String.format("Classroom marked VACANT after %d seconds without motion. FAN and LIGHT forced OFF.",
+                                        vacancyTimeoutSeconds));
+                    }
+                }
+            }
+
+            if (tracker.state == OccupancyState.VACANT) {
+                // Force FAN OFF
+                applyDeviceState(classroom, "FAN", "OFF",
+                        "PIR vacancy: classroom vacant for " + vacancyTimeoutSeconds + "s, forcing FAN OFF.");
+                data.setFanStatus("OFF");
+
+                // Force LIGHT OFF
+                applyDeviceState(classroom, "LIGHT", "OFF",
+                        "PIR vacancy: classroom vacant for " + vacancyTimeoutSeconds + "s, forcing LIGHT OFF.");
+                data.setLightStatus("OFF");
+
+                environmentDataRepository.save(data);
+
+                String vacantMsg = String.format(
+                        "Classroom VACANT (no motion for ≥%d seconds). FAN and LIGHT forced OFF. Automation blocked.",
+                        vacancyTimeoutSeconds);
+
+                results.add(new AutomationDecisionResult(
+                        "PIR_OCCUPANCY",
+                        "FAN+LIGHT",
+                        "OFF",
+                        AutomationDecisionStatus.EXECUTION_SUCCESS,
+                        "UNKNOWN",
+                        "OFF",
+                        vacantMsg,
+                        snapshot,
+                        LocalDateTime.now(clock),
+                        true
+                ));
+
+                // RETURN EARLY — temp/LDR automation is blocked while VACANT
+                return results;
+            }
         }
 
-        // ── Policy 1: Temperature-Based Fan Control ───────────────────────────
+        // ── PRIORITY 4: Temperature-Based Fan Control ──────────────────────────
+        // Only reached when classroom is OCCUPIED or in COUNTDOWN
         results.add(evaluateFanPolicy(classroom, data, now, snapshot));
 
-        // ── Policy 2: Light-Intensity-Based Light Control ─────────────────────
-        results.add(evaluateLightPolicy(classroom, data, now, motionDetected, snapshot));
+        // ── PRIORITY 5: LDR-Based Light Control ───────────────────────────────
+        // Only reached when classroom is OCCUPIED or in COUNTDOWN
+        results.add(evaluateLightPolicy(classroom, data, now, snapshot));
 
         return results;
     }
 
+    // ── Policy: Temperature-Based Fan Control ─────────────────────────────────
+
     /**
-     * Policy 1: Temperature-based fan control
-     * - Temp > 24.0°C -> ON
-     * - Temp <= 24.0°C -> OFF
-     * - Check durable teacher override first
-     * - Check anti-flapping cooldown (180s)
+     * Temp > 24.0°C → FAN ON; ≤ 24.0°C → FAN OFF.
+     * Immediate — no cooldown (cooldownSeconds = 0 in config).
+     * Teacher overrides block this policy.
      */
     private AutomationDecisionResult evaluateFanPolicy(
             Classroom classroom, EnvironmentData data, Instant now, Map<String, Object> snapshot) {
 
         Double temp = data.getTemperature();
 
-        // Range validation: plausible ambient temperature (-10°C to 60°C)
         if (temp == null || temp < -10.0 || temp > 60.0) {
             return new AutomationDecisionResult(
                     "TEMPERATURE_FAN_CONTROL",
@@ -213,7 +353,7 @@ public class ClassroomAutomationEngine {
 
         String currentFanState = normalizeState(data.getFanStatus());
 
-        // Policy 5: Check durable teacher override
+        // Check durable teacher override
         Optional<DeviceOverride> overrideOpt = deviceOverrideService.getActiveOverride(classroom, "FAN");
         if (overrideOpt.isPresent()) {
             DeviceOverride override = overrideOpt.get();
@@ -233,10 +373,9 @@ public class ClassroomAutomationEngine {
             );
         }
 
-        // Deterministic threshold rule: > 24.0 -> ON; <= 24.0 -> OFF
+        // Deterministic threshold: > 24.0 → ON; ≤ 24.0 → OFF
         String desiredFanState = (temp > temperatureThreshold) ? "ON" : "OFF";
 
-        // Never repeat command when already in desired state
         if (desiredFanState.equalsIgnoreCase(currentFanState)) {
             return new AutomationDecisionResult(
                     "TEMPERATURE_FAN_CONTROL",
@@ -245,7 +384,7 @@ public class ClassroomAutomationEngine {
                     AutomationDecisionStatus.NO_ACTION_REQUIRED,
                     currentFanState,
                     currentFanState,
-                    String.format("Fan is already in requested state (%s). Temperature=%.1f°C (Threshold=%.1f°C).",
+                    String.format("Fan already in desired state (%s). Temp=%.1f°C (Threshold=%.1f°C).",
                             desiredFanState, temp, temperatureThreshold),
                     snapshot,
                     LocalDateTime.now(clock),
@@ -253,10 +392,10 @@ public class ClassroomAutomationEngine {
             );
         }
 
-        // Policy 4: Anti-Flapping Cooldown Check (3 minutes / 180s)
+        // Cooldown check (effectively disabled since cooldownSeconds=0, but kept for safety)
         String cooldownKey = classroom.getId() + "_FAN";
         Instant lastChange = lastStateChangeMap.get(cooldownKey);
-        if (lastChange != null) {
+        if (lastChange != null && cooldownSeconds > 0) {
             long elapsedSeconds = Duration.between(lastChange, now).getSeconds();
             if (elapsedSeconds < cooldownSeconds) {
                 return new AutomationDecisionResult(
@@ -266,8 +405,7 @@ public class ClassroomAutomationEngine {
                         AutomationDecisionStatus.COOLDOWN_ACTIVE,
                         currentFanState,
                         currentFanState,
-                        String.format("Cooldown active for FAN (%d/%d seconds elapsed). Command deferred to prevent flapping.",
-                                elapsedSeconds, cooldownSeconds),
+                        String.format("Cooldown active for FAN (%d/%d seconds elapsed).", elapsedSeconds, cooldownSeconds),
                         snapshot,
                         LocalDateTime.now(clock),
                         false
@@ -275,19 +413,16 @@ public class ClassroomAutomationEngine {
             }
         }
 
-        // Execute state change with command lifecycle tracking
         boolean executed = applyDeviceState(classroom, "FAN", desiredFanState,
-                String.format("Automatic fan control: Temp=%.1f°C, Threshold=%.1f°C", temp, temperatureThreshold));
+                String.format("Auto fan control: Temp=%.1f°C, Threshold=%.1f°C", temp, temperatureThreshold));
 
         if (executed) {
             lastStateChangeMap.put(cooldownKey, now);
             data.setFanStatus(desiredFanState);
             environmentDataRepository.save(data);
-
             auditLogService.log("AUTO_FAN_CONTROL", "Classroom", classroom.getId(),
                     String.format("Automatic fan control: set %s (Temp=%.1f°C, Threshold=%.1f°C)",
                             desiredFanState, temp, temperatureThreshold));
-
             return new AutomationDecisionResult(
                     "TEMPERATURE_FAN_CONTROL",
                     "FAN",
@@ -316,21 +451,20 @@ public class ClassroomAutomationEngine {
         }
     }
 
+    // ── Policy: LDR-Based Light Control ───────────────────────────────────────
+
     /**
-     * Policy 2: Light-intensity-based light control
-     * - Light <= 1700.0 -> ON
-     * - Light > 1700.0 -> OFF
-     * - Check durable teacher override first
-     * - Policy 6: PIR inactivity alone must NEVER establish EMPTY; UNKNOWN never treated as EMPTY
-     * - Check anti-flapping cooldown (180s)
+     * LDR ≤ 1700 → LIGHT ON; > 1700 → LIGHT OFF.
+     * Immediate — no cooldown.
+     * Teacher overrides block this policy.
      */
     private AutomationDecisionResult evaluateLightPolicy(
-            Classroom classroom, EnvironmentData data, Instant now, boolean motionDetected, Map<String, Object> snapshot) {
+            Classroom classroom, EnvironmentData data, Instant now, Map<String, Object> snapshot) {
 
         Long classroomId = classroom.getId();
         String currentLightState = normalizeState(data.getLightStatus());
 
-        // Policy 5: Check durable teacher override
+        // Check durable teacher override
         Optional<DeviceOverride> overrideOpt = deviceOverrideService.getActiveOverride(classroom, "LIGHT");
         if (overrideOpt.isPresent()) {
             DeviceOverride override = overrideOpt.get();
@@ -350,10 +484,6 @@ public class ClassroomAutomationEngine {
             );
         }
 
-        // Policy 6: Occupancy Safety Gate
-        // Master Prompt: PIR inactivity alone must NEVER establish classroom is empty.
-        // UNKNOWN occupancy must NEVER be treated as EMPTY.
-        // Therefore, we only evaluate light intensity rather than abruptly killing lights based solely on PIR quietness.
         Double lightIntensity = resolveLightIntensity(data);
         if (lightIntensity == null || lightIntensity < 0.0) {
             return new AutomationDecisionResult(
@@ -370,10 +500,9 @@ public class ClassroomAutomationEngine {
             );
         }
 
-        // Deterministic threshold rule: <= 1700 -> ON (dark); > 1700 -> OFF (bright enough)
+        // Deterministic threshold: ≤ 1700 → ON (dark); > 1700 → OFF (bright)
         String desiredLightState = (lightIntensity <= lightIntensityThreshold) ? "ON" : "OFF";
 
-        // Never repeat command when already in desired state
         if (desiredLightState.equalsIgnoreCase(currentLightState)) {
             return new AutomationDecisionResult(
                     "LIGHT_INTENSITY_CONTROL",
@@ -382,7 +511,7 @@ public class ClassroomAutomationEngine {
                     AutomationDecisionStatus.NO_ACTION_REQUIRED,
                     currentLightState,
                     currentLightState,
-                    String.format("Light is already in requested state (%s). Intensity=%.1f (Threshold=%.1f).",
+                    String.format("Light already in desired state (%s). Intensity=%.1f (Threshold=%.1f).",
                             desiredLightState, lightIntensity, lightIntensityThreshold),
                     snapshot,
                     LocalDateTime.now(clock),
@@ -390,10 +519,10 @@ public class ClassroomAutomationEngine {
             );
         }
 
-        // Cooldown check (3 minutes / 180s)
+        // Cooldown check (effectively disabled since cooldownSeconds=0)
         String cooldownKey = classroomId + "_LIGHT";
         Instant lastChange = lastStateChangeMap.get(cooldownKey);
-        if (lastChange != null) {
+        if (lastChange != null && cooldownSeconds > 0) {
             long elapsedSeconds = Duration.between(lastChange, now).getSeconds();
             if (elapsedSeconds < cooldownSeconds) {
                 return new AutomationDecisionResult(
@@ -403,8 +532,7 @@ public class ClassroomAutomationEngine {
                         AutomationDecisionStatus.COOLDOWN_ACTIVE,
                         currentLightState,
                         currentLightState,
-                        String.format("Cooldown active for LIGHT (%d/%d seconds elapsed). Command deferred to prevent flapping.",
-                                elapsedSeconds, cooldownSeconds),
+                        String.format("Cooldown active for LIGHT (%d/%d seconds elapsed).", elapsedSeconds, cooldownSeconds),
                         snapshot,
                         LocalDateTime.now(clock),
                         false
@@ -413,17 +541,15 @@ public class ClassroomAutomationEngine {
         }
 
         boolean executed = applyDeviceState(classroom, "LIGHT", desiredLightState,
-                String.format("Automatic light control: Intensity=%.1f, Threshold=%.1f", lightIntensity, lightIntensityThreshold));
+                String.format("Auto light control: Intensity=%.1f, Threshold=%.1f", lightIntensity, lightIntensityThreshold));
 
         if (executed) {
             lastStateChangeMap.put(cooldownKey, now);
             data.setLightStatus(desiredLightState);
             environmentDataRepository.save(data);
-
             auditLogService.log("AUTO_LIGHT_CONTROL", "Classroom", classroomId,
                     String.format("Automatic light control: set %s (Intensity=%.1f, Threshold=%.1f)",
                             desiredLightState, lightIntensity, lightIntensityThreshold));
-
             return new AutomationDecisionResult(
                     "LIGHT_INTENSITY_CONTROL",
                     "LIGHT",
@@ -452,9 +578,12 @@ public class ClassroomAutomationEngine {
         }
     }
 
+    // ── Device Command Execution ───────────────────────────────────────────────
+
     /**
-     * Applies state changes to matching devices registered in the classroom
-     * and logs the command lifecycle record (CREATED -> DISPATCHED -> ACKNOWLEDGED).
+     * Writes device state to DB and creates full command lifecycle record
+     * (CREATED → DISPATCHED → ACKNOWLEDGED).
+     * Physical relay actuation happens via the ESP32 reading the telemetry response.
      */
     private boolean applyDeviceState(Classroom classroom, String targetType, String action, String reason) {
         String commandUuid = UUID.randomUUID().toString();
@@ -481,7 +610,6 @@ public class ClassroomAutomationEngine {
                     : Device.DeviceStatus.OFFLINE;
 
             List<Device> devices = deviceRepository.findByClassroom(classroom);
-            int matched = 0;
             for (Device d : devices) {
                 String name = d.getDeviceName() != null ? d.getDeviceName().toUpperCase(Locale.ROOT) : "";
                 String type = d.getDeviceType() != null ? d.getDeviceType().name() : "";
@@ -489,7 +617,6 @@ public class ClassroomAutomationEngine {
                 if (name.contains(targetType) || type.contains(targetType) || d.getDeviceType() == Device.DeviceType.RELAY) {
                     d.setStatus(targetStatus);
                     deviceRepository.save(d);
-                    matched++;
                 }
             }
 
@@ -505,6 +632,8 @@ public class ClassroomAutomationEngine {
             return false;
         }
     }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private Double resolveLightIntensity(EnvironmentData data) {
         if (data.getLightLevel() != null) return data.getLightLevel();
@@ -532,10 +661,10 @@ public class ClassroomAutomationEngine {
     }
 
     /**
-     * Resets internal trackers — useful for testing and state resets.
+     * Resets all in-memory trackers. Used in tests and state resets.
      */
     public void resetTrackers() {
         lastStateChangeMap.clear();
-        lastMotionDetectedMap.clear();
+        occupancyTrackerMap.clear();
     }
 }

@@ -89,8 +89,9 @@ app:
     automation:
       temperature-threshold: ${AUTOMATION_TEMP_THRESHOLD:24.0}
       light-threshold: ${AUTOMATION_LIGHT_THRESHOLD:1700.0}
-      cooldown-seconds: ${AUTOMATION_COOLDOWN_SECONDS:180}
-      inactivity-seconds: ${AUTOMATION_INACTIVITY_SECONDS:300}
+      vacancy-timeout-seconds: ${AUTOMATION_VACANCY_TIMEOUT_SECONDS:60}
+      cooldown-seconds: ${AUTOMATION_COOLDOWN_SECONDS:0}
+      inactivity-seconds: ${AUTOMATION_INACTIVITY_SECONDS:60}
       max-freshness-seconds: ${AUTOMATION_FRESHNESS_SECONDS:600}
 
   cors:

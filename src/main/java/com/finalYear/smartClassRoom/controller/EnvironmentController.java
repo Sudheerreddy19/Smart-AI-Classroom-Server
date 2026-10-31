@@ -62,7 +62,6 @@ public class EnvironmentController {
                         .ResourceNotFoundException("Classroom", classroomId));
         List<EnvironmentData> data = environmentDataRepository
                 .findByClassroomOrderByRecordedAtAsc(classroom);
-        // Return last `limit` records
         int size = data.size();
         List<EnvironmentData> paged = data.subList(Math.max(0, size - limit), size);
         List<EnvironmentResponse> result = paged.stream()
@@ -97,7 +96,8 @@ public class EnvironmentController {
 
         if (classroom == null) {
             return ResponseEntity.badRequest().body(new TelemetryIngestResponse(
-                    "ERROR: No active classroom found", null, "OFF", "OFF", false, java.util.Collections.emptyList()));
+                    "ERROR: No active classroom found", null, "OFF", "OFF", false,
+                    "UNKNOWN", null, "No classroom found", java.util.Collections.emptyList()));
         }
 
         Double light = req.lightIntensity() != null ? req.lightIntensity() : req.lightLevel();
@@ -139,17 +139,29 @@ public class EnvironmentController {
                     classroom.getId(), e.getMessage(), e);
         }
 
-        String activeFan = saved.getFanStatus() != null ? saved.getFanStatus() : "OFF";
-        String activeLight = saved.getLightStatus() != null ? saved.getLightStatus() : "OFF";
+        String activeFan   = saved.getFanStatus()   != null ? saved.getFanStatus()   : "OFF";
+        String activeLight = saved.getLightStatus()  != null ? saved.getLightStatus() : "OFF";
         boolean gasEmergency = Boolean.TRUE.equals(saved.getGasLeak())
                 || (saved.getGasPpm() != null && saved.getGasPpm() > 400.0);
 
+        // Occupancy status from in-memory engine state
+        Long classroomId = classroom.getId();
+        String occupancyStatus = automationEngine.getOccupancyStatus(classroomId);
+        Long vacancyCountdown  = automationEngine.getVacancyCountdown(classroomId);
+
+        // Latest decision summary for ESP32 serial monitor logging
+        String decisionSummary = decisions.isEmpty() ? "No decisions" :
+                decisions.get(decisions.size() - 1).reason();
+
         return ResponseEntity.ok(new TelemetryIngestResponse(
                 "SUCCESS",
-                classroom.getId(),
+                classroomId,
                 activeFan,
                 activeLight,
                 gasEmergency,
+                occupancyStatus,
+                vacancyCountdown,
+                decisionSummary,
                 decisions
         ));
     }
@@ -189,17 +201,34 @@ public class EnvironmentController {
         return ResponseEntity.ok("Override cancelled successfully.");
     }
 
+    /** Current occupancy status for a classroom (dashboard polling endpoint). */
+    @GetMapping("/occupancy/{classroomId}")
+    public ResponseEntity<OccupancyStatusResponse> getOccupancy(@PathVariable Long classroomId) {
+        return ResponseEntity.ok(new OccupancyStatusResponse(
+                classroomId,
+                automationEngine.getOccupancyStatus(classroomId),
+                automationEngine.getVacancyCountdown(classroomId)
+        ));
+    }
+
     // ── Helper ────────────────────────────────────────────────────────────────
     private EnvironmentResponse toResponse(Classroom classroom, EnvironmentData data) {
+        Long classroomId = classroom.getId();
+        String occupancyStatus = automationEngine.getOccupancyStatus(classroomId);
+        Long vacancyCountdown  = automationEngine.getVacancyCountdown(classroomId);
+
         if (data == null) {
             return EnvironmentResponse.builder()
-                    .classroomId(classroom.getId())
+                    .classroomId(classroomId)
                     .roomNumber(classroom.getRoomNumber())
+                    .occupancyStatus(occupancyStatus)
+                    .vacancyCountdownSeconds(vacancyCountdown)
+                    .decisionSummary("No telemetry received yet")
                     .build();
         }
         return EnvironmentResponse.builder()
                 .id(data.getId())
-                .classroomId(classroom.getId())
+                .classroomId(classroomId)
                 .roomNumber(classroom.getRoomNumber())
                 .temperature(data.getTemperature())
                 .humidity(data.getHumidity())
@@ -217,11 +246,15 @@ public class EnvironmentController {
                 .motionDetected(data.getMotionDetected())
                 .deviceId(data.getDeviceId())
                 .hardwareClassroomId(data.getHardwareClassroomId())
+                .occupancyStatus(occupancyStatus)
+                .vacancyCountdownSeconds(vacancyCountdown)
+                .decisionSummary(null) // Populated live during ingest, not in GET
                 .recordedAt(data.getRecordedAt())
                 .build();
     }
 
-    // ── Record for ingest payload from ESP32 ──────────────────────────────────
+    // ── Record types ──────────────────────────────────────────────────────────
+
     public record EnvironmentIngestRequest(
             Long classroomId,
             String roomNumber,
@@ -243,13 +276,21 @@ public class EnvironmentController {
             Boolean motionDetected  // PIR sensor direct boolean
     ) {}
 
-    // ── Record for response payload sent back to ESP32 for actuation ──────────
     public record TelemetryIngestResponse(
             String status,
             Long classroomId,
-            String fanStatus,       // "ON" or "OFF" -> sets fan relay
-            String lightStatus,     // "ON" or "OFF" -> sets light relay
-            boolean gasEmergency,   // true if gas leak detected
+            String fanStatus,               // "ON" or "OFF" → sets fan relay on ESP32
+            String lightStatus,             // "ON" or "OFF" → sets light relay on ESP32
+            boolean gasEmergency,           // true if gas leak detected
+            String occupancyStatus,         // "OCCUPIED", "COUNTDOWN", or "VACANT"
+            Long vacancyCountdownSeconds,   // seconds remaining before VACANT (null if not in countdown)
+            String decisionSummary,         // human-readable automation summary for ESP32 serial log
             List<AutomationDecisionResult> decisions
+    ) {}
+
+    public record OccupancyStatusResponse(
+            Long classroomId,
+            String occupancyStatus,
+            Long vacancyCountdownSeconds
     ) {}
 }

@@ -30,8 +30,8 @@ public class EnvironmentResponse {
     private Double noiseLevel;
 
     private Double airQualityIndex;
-    
-    private String roomState;       // "ACTIVE" or "EMPTY"
+
+    private String roomState;       // "ACTIVE" or "EMPTY" (raw PIR value from ESP32)
     private Boolean isDark;          // true / false
     private Boolean gasLeak;         // true / false
     private Double gasPpm;           // Numeric gas reading
@@ -41,6 +41,11 @@ public class EnvironmentResponse {
     private Boolean motionDetected;  // PIR motion sensor
     private String deviceId;         // Hardware device ID e.g. "ESP32_01"
     private String hardwareClassroomId; // Hardware classroom string e.g. "CLASSROOM_01"
+
+    // ── Occupancy & Dashboard fields (populated by automation engine) ─────────
+    private String occupancyStatus;          // "OCCUPIED", "COUNTDOWN", or "VACANT"
+    private Long vacancyCountdownSeconds;    // seconds remaining before vacancy declared (null if not in countdown)
+    private String decisionSummary;          // Human-readable latest automation decision message
 
     private LocalDateTime recordedAt;
 }
