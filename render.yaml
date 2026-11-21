@@ -68,6 +68,10 @@ services:
       - key: FACE_SERVICE_URL
         value: http://localhost:8000
 
+      # ── Face AI Agent WebSocket Secret ───────────────────────────
+      - key: CLASSAI_AGENT_AUTH_SECRET
+        value: smart-classroom-agent-secret-key-2026
+
     # Health check — Render uses this to know app is ready
     healthCheckPath: /
 
