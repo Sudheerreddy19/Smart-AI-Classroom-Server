@@ -10,4 +10,5 @@ public interface FaceRegistrationService {
     FaceRegistrationResponse registerFace(Long studentId, User caller);
     FaceRegistrationResponse getFaceStatus(Long studentId);
     Page<StudentResponse> getPendingFaceStudents(Long departmentId, Pageable pageable);
+    java.util.Map<String, Object> getAgentStatus();
 }

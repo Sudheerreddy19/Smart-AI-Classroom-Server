@@ -44,8 +44,9 @@ public class SecurityConfig {
                     "/api/v3/api-docs/**"
                 ).permitAll()
 
-                // ── Public: WebSocket ─────────────────────────────────────────
+                // ── Public: WebSocket & Agent Status ──────────────────────────
                 .requestMatchers("/ws/**").permitAll()
+                .requestMatchers("/api/faces/agent-status").permitAll()
 
                 // ── Public: Actuator health ───────────────────────────────────
                 .requestMatchers("/actuator/**").permitAll()

@@ -9,6 +9,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/faces")
 @RequiredArgsConstructor
@@ -29,5 +31,10 @@ public class FaceRegistrationController {
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<FaceRegistrationResponse> getFaceStatus(@PathVariable Long studentId) {
         return ResponseEntity.ok(faceRegistrationService.getFaceStatus(studentId));
+    }
+
+    @GetMapping("/agent-status")
+    public ResponseEntity<Map<String, Object>> getAgentStatus() {
+        return ResponseEntity.ok(faceRegistrationService.getAgentStatus());
     }
 }

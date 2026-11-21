@@ -11,6 +11,7 @@ import com.finalYear.smartClassRoom.repository.StudentFaceRepository;
 import com.finalYear.smartClassRoom.repository.StudentRepository;
 import com.finalYear.smartClassRoom.repository.TeacherRepository;
 import com.finalYear.smartClassRoom.service.FaceRegistrationService;
+import com.finalYear.smartClassRoom.websocket.FaceAgentSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -23,21 +24,31 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class FaceRegistrationServiceImpl implements FaceRegistrationService {
 
-    private final StudentRepository     studentRepository;
-    private final TeacherRepository     teacherRepository;
-    private final StudentFaceRepository studentFaceRepository;
-    private final RestTemplate          restTemplate;
+    private final StudentRepository        studentRepository;
+    private final TeacherRepository        teacherRepository;
+    private final StudentFaceRepository    studentFaceRepository;
+    private final RestTemplate             restTemplate;
+    private final FaceAgentSessionManager  faceAgentSessionManager;
 
     @Value("${face.service.url:http://localhost:8000}")
     private String faceServiceUrl;
+
+    @Value("${classai.capture.job-timeout-seconds:90}")
+    private long captureJobTimeoutSeconds;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Register face — calls Python service and updates student status
@@ -63,32 +74,71 @@ public class FaceRegistrationServiceImpl implements FaceRegistrationService {
         }
 
         final Teacher finalTeacher = capturedByTeacher;
-        String url = faceServiceUrl + "/face/capture/" + studentId;
 
-        // Build request body with student details — Python requires 'registerNumber'
-        Map<String, Object> requestBody = new java.util.HashMap<>();
-        requestBody.put("registerNumber", student.getRollNumber());
-        requestBody.put("student_id",     String.valueOf(studentId));
-        requestBody.put("studentName",    student.getFullName());
-        requestBody.put("department",     student.getDepartment() != null ? student.getDepartment().getName() : "");
-        requestBody.put("semester",       student.getSemester()   != null ? String.valueOf(student.getSemester().getNumber()) : "");
-        requestBody.put("teacher_id",     finalTeacher != null ? String.valueOf(finalTeacher.getId()) : null);
+        // Prepare job payload
+        String jobId = UUID.randomUUID().toString();
+        Map<String, Object> jobPayload = new HashMap<>();
+        jobPayload.put("type",           "CAPTURE_JOB");
+        jobPayload.put("jobId",          jobId);
+        jobPayload.put("studentDbId",    studentId);
+        jobPayload.put("registerNumber", student.getRollNumber());
+        jobPayload.put("student_id",     String.valueOf(studentId));
+        jobPayload.put("studentName",    student.getFullName());
+        jobPayload.put("department",     student.getDepartment() != null ? student.getDepartment().getName() : "");
+        jobPayload.put("semester",       student.getSemester()   != null ? String.valueOf(student.getSemester().getNumber()) : "");
+        jobPayload.put("section",        student.getSection()    != null ? student.getSection().getName() : "");
+        jobPayload.put("teacher_id",     finalTeacher != null ? String.valueOf(finalTeacher.getId()) : null);
+        jobPayload.put("teacherId",      finalTeacher != null ? finalTeacher.getId() : null);
+
+        Map<String, Object> response;
 
         try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> response = restTemplate.postForObject(url, requestBody, Map.class);
+            if (faceAgentSessionManager.isAgentConnected()) {
+                log.info("Face AI Agent is connected. Dispatching CAPTURE_JOB via WebSocket: jobId={}, studentId={}",
+                        jobId, studentId);
+                try {
+                    CompletableFuture<Map<String, Object>> future =
+                            faceAgentSessionManager.dispatchJob(jobPayload, captureJobTimeoutSeconds);
+                    response = future.get(captureJobTimeoutSeconds, TimeUnit.SECONDS);
+                } catch (TimeoutException e) {
+                    log.error("Capture job {} timed out after {}s", jobId, captureJobTimeoutSeconds);
+                    throw new RuntimeException("Face capture timed out. Please ensure the student is facing the camera and retry.");
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    log.error("Capture job {} execution failed: {}", jobId, cause.getMessage());
+                    throw new RuntimeException("Face capture failed: " + cause.getMessage());
+                }
+            } else {
+                // Fallback to direct HTTP for local development environments
+                log.warn("Agent WebSocket not connected. Attempting HTTP fallback to {}", faceServiceUrl);
+                String url = faceServiceUrl + "/face/capture/" + studentId;
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> httpResponse = restTemplate.postForObject(url, jobPayload, Map.class);
+                    response = httpResponse;
+                } catch (ResourceAccessException e) {
+                    log.error("Face AI service unreachable via WebSocket and HTTP ({})", url);
+                    throw new RuntimeException(
+                            "Face service is not running. Please start the Python service on your classroom laptop.");
+                }
+            }
 
             if (response == null || !Boolean.TRUE.equals(response.get("success"))) {
                 String msg = response != null ? (String) response.get("message") : "No response from face service";
                 throw new RuntimeException("Face capture failed: " + msg);
             }
 
-            // Extract response data safely
-            int imagesCaptured = response.get("images_captured") instanceof Number n
-                    ? n.intValue() : 0;
-            String encodingPath  = (String) response.get("encoding_path");
+            // Extract response data safely (handling both camelCase and snake_case)
+            Object imgCountObj = response.get("imagesCaptured");
+            if (imgCountObj == null) imgCountObj = response.get("images_captured");
+            int imagesCaptured = imgCountObj instanceof Number n ? n.intValue() : 0;
+
+            String encodingPath = (String) response.get("encodingPath");
+            if (encodingPath == null) encodingPath = (String) response.get("encoding_path");
+
             @SuppressWarnings("unchecked")
-            List<String> imagePaths = (List<String>) response.getOrDefault("image_paths", List.of());
+            List<String> imagePaths = (List<String>) response.getOrDefault("imagePaths",
+                    response.getOrDefault("image_paths", List.of()));
 
             // Remove any previous face records for this student (prevent duplicates on re-capture)
             if (studentFaceRepository.existsByStudent(student)) {
@@ -127,17 +177,23 @@ public class FaceRegistrationServiceImpl implements FaceRegistrationService {
                     .capturedAt(LocalDateTime.now())
                     .build();
 
-        } catch (ResourceAccessException e) {
-            log.error("Python face service unreachable at {}", url);
-            throw new RuntimeException(
-                    "Face service is not running. Please start the Python service on port 8000. " +
-                    "See ai-face-service/README.md for instructions.");
         } catch (IllegalStateException e) {
+            throw e;
+        } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
             log.error("Error during face registration for studentId={}: {}", studentId, e.getMessage(), e);
             throw new RuntimeException("Face capture error: " + e.getMessage());
         }
+    }
+
+    @Override
+    public Map<String, Object> getAgentStatus() {
+        Map<String, Object> status = new HashMap<>();
+        status.put("connected", faceAgentSessionManager.isAgentConnected());
+        status.put("agentId", faceAgentSessionManager.getConnectedAgentId());
+        status.put("lastHeartbeat", faceAgentSessionManager.getLastHeartbeat());
+        return status;
     }
 
 

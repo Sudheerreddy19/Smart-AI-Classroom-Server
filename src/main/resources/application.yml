@@ -45,6 +45,13 @@ face:
   service:
     url: ${FACE_SERVICE_URL:http://localhost:8000}
 
+classai:
+  agent:
+    auth-secret: ${CLASSAI_AGENT_AUTH_SECRET:smart-classroom-agent-secret-key-2026}
+    heartbeat-timeout-seconds: ${CLASSAI_AGENT_HEARTBEAT_TIMEOUT:60}
+  capture:
+    job-timeout-seconds: ${CLASSAI_CAPTURE_JOB_TIMEOUT:90}
+
 server:
   port: ${PORT:8080}
 
