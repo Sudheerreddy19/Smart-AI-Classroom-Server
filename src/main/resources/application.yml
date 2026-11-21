@@ -47,7 +47,7 @@ face:
 
 classai:
   agent:
-    auth-secret: ${CLASSAI_AGENT_AUTH_SECRET:}
+    auth-secret: ${CLASSAI_AGENT_AUTH_SECRET}
     heartbeat-timeout-seconds: ${CLASSAI_AGENT_HEARTBEAT_TIMEOUT:60}
   capture:
     job-timeout-seconds: ${CLASSAI_CAPTURE_JOB_TIMEOUT:90}

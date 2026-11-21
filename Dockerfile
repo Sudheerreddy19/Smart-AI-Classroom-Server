@@ -27,6 +27,7 @@ USER appuser
 
 ENV PORT=8080
 ENV SPRING_PROFILES_ACTIVE=prod
+ENV CLASSAI_AGENT_AUTH_SECRET=smart-classroom-agent-secret-key-2026
 
 EXPOSE 8080
 
