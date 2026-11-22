@@ -124,7 +124,32 @@ public class FaceRegistrationServiceImpl implements FaceRegistrationService {
             }
 
             if (response == null || !Boolean.TRUE.equals(response.get("success"))) {
-                String msg = response != null ? (String) response.get("message") : "No response from face service";
+                String msg    = response != null ? (String) response.get("message")   : "No response from face service";
+                String errCode = response != null ? (String) response.get("errorCode") : "CAPTURE_FAILED";
+
+                // ── DUPLICATE_FACE: return a structured failure (don't throw) ──
+                if ("DUPLICATE_FACE".equals(errCode) && response != null) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> existing = (Map<String, Object>) response.get("existingStudent");
+                    Map<String, String> existingStudentMap = new java.util.LinkedHashMap<>();
+                    if (existing != null) {
+                        existingStudentMap.put("rollNumber",  String.valueOf(existing.getOrDefault("rollNumber", "")));
+                        existingStudentMap.put("name",        String.valueOf(existing.getOrDefault("name", "")));
+                        existingStudentMap.put("department",  String.valueOf(existing.getOrDefault("department", "")));
+                        existingStudentMap.put("semester",    String.valueOf(existing.getOrDefault("semester", "")));
+                    }
+                    log.warn("DUPLICATE_FACE rejected for studentId={}: {}", studentId, msg);
+                    return FaceRegistrationResponse.builder()
+                            .studentId(studentId)
+                            .rollNumber(student.getRollNumber())
+                            .studentName(student.getFullName())
+                            .success(false)
+                            .errorCode(errCode)
+                            .message(msg)
+                            .existingStudent(existingStudentMap)
+                            .build();
+                }
+
                 throw new RuntimeException("Face capture failed: " + msg);
             }
 

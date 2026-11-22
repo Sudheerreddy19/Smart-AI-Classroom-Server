@@ -24,7 +24,12 @@ public class FaceRegistrationController {
     @PreAuthorize("hasAnyRole('TEACHER','HOD','ADMIN','SUPER_ADMIN')")
     public ResponseEntity<FaceRegistrationResponse> registerFace(@PathVariable Long studentId) {
         User caller = currentUserContextService.getCaller();
-        return ResponseEntity.ok(faceRegistrationService.registerFace(studentId, caller));
+        FaceRegistrationResponse result = faceRegistrationService.registerFace(studentId, caller);
+        if (!result.isSuccess()) {
+            // Return 400 so the frontend axios catch block receives the response body
+            return ResponseEntity.badRequest().body(result);
+        }
+        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/status/{studentId}")
