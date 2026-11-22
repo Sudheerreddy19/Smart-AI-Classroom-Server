@@ -1,4 +1,4 @@
-package com.finalYear.smartClassRoom.dto;
+package com.finalYear.smartClassRoom.dto.response;
 
 import lombok.*;
 

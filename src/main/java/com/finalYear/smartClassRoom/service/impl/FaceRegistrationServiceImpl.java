@@ -131,13 +131,35 @@ public class FaceRegistrationServiceImpl implements FaceRegistrationService {
                 if ("DUPLICATE_FACE".equals(errCode) && response != null) {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> existing = (Map<String, Object>) response.get("existingStudent");
+                    String reportedRoll = existing != null ? String.valueOf(existing.getOrDefault("rollNumber", "")) : "";
+                    
                     Map<String, String> existingStudentMap = new java.util.LinkedHashMap<>();
-                    if (existing != null) {
+                    
+                    // Validate against Spring Boot database (never blindly trust python client data)
+                    if (reportedRoll != null && !reportedRoll.isBlank()) {
+                        studentRepository.findByRollNumber(reportedRoll).ifPresentOrElse(s -> {
+                            existingStudentMap.put("id",          String.valueOf(s.getId()));
+                            existingStudentMap.put("studentId",   String.valueOf(s.getId()));
+                            existingStudentMap.put("rollNumber",  s.getRollNumber());
+                            existingStudentMap.put("name",        s.getFullName());
+                            existingStudentMap.put("department",  s.getDepartment() != null ? s.getDepartment().getName() : "");
+                            existingStudentMap.put("semester",    s.getSemester() != null ? String.valueOf(s.getSemester().getNumber()) : "");
+                            existingStudentMap.put("status",      s.getRegistrationStatus() != null ? s.getRegistrationStatus().name() : "");
+                        }, () -> {
+                            if (existing != null) {
+                                existingStudentMap.put("rollNumber",  reportedRoll);
+                                existingStudentMap.put("name",        String.valueOf(existing.getOrDefault("name", "")));
+                                existingStudentMap.put("department",  String.valueOf(existing.getOrDefault("department", "")));
+                                existingStudentMap.put("semester",    String.valueOf(existing.getOrDefault("semester", "")));
+                            }
+                        });
+                    } else if (existing != null) {
                         existingStudentMap.put("rollNumber",  String.valueOf(existing.getOrDefault("rollNumber", "")));
                         existingStudentMap.put("name",        String.valueOf(existing.getOrDefault("name", "")));
                         existingStudentMap.put("department",  String.valueOf(existing.getOrDefault("department", "")));
                         existingStudentMap.put("semester",    String.valueOf(existing.getOrDefault("semester", "")));
                     }
+
                     log.warn("DUPLICATE_FACE rejected for studentId={}: {}", studentId, msg);
                     return FaceRegistrationResponse.builder()
                             .studentId(studentId)
@@ -147,6 +169,19 @@ public class FaceRegistrationServiceImpl implements FaceRegistrationService {
                             .errorCode(errCode)
                             .message(msg)
                             .existingStudent(existingStudentMap)
+                            .build();
+                }
+
+                // ── UNCERTAIN_MATCH: return structured guidance (don't throw) ──
+                if ("UNCERTAIN_MATCH".equals(errCode) && response != null) {
+                    log.info("UNCERTAIN_MATCH for studentId={}: {}", studentId, msg);
+                    return FaceRegistrationResponse.builder()
+                            .studentId(studentId)
+                            .rollNumber(student.getRollNumber())
+                            .studentName(student.getFullName())
+                            .success(false)
+                            .errorCode("UNCERTAIN_MATCH")
+                            .message(msg)
                             .build();
                 }
 
