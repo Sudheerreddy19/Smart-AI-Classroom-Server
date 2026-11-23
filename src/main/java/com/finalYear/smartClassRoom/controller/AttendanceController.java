@@ -9,9 +9,13 @@ import com.finalYear.smartClassRoom.dto.response.FaceAttendanceResult;
 import com.finalYear.smartClassRoom.entity.User;
 import com.finalYear.smartClassRoom.service.AttendanceService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -138,5 +142,61 @@ public class AttendanceController {
 
         return ResponseEntity.ok(
                 attendanceService.getSessionsInRange(departmentId, dateFrom, dateTo));
+    }
+
+    // ── Voice-Triggered Face Attendance Endpoints ─────────────────────────────
+
+    /**
+     * POST /api/attendance/face/start-session
+     *
+     * Creates an attendance session and commands the Python agent via WebSocket
+     * to open the webcam and begin recognition.
+     */
+    @PostMapping("/face/start-session")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN','HOD','TEACHER')")
+    public ResponseEntity<Map<String, Object>> startFaceAttendanceSession(
+            @Valid @RequestBody AttendanceSessionRequest request) {
+        Map<String, Object> result = attendanceService.startFaceAttendanceSession(request);
+        String status = (String) result.getOrDefault("status", "ERROR");
+        if ("AGENT_OFFLINE".equals(status)) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(result);
+        }
+        if ("ERROR".equals(status)) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
+        }
+        return ResponseEntity.status(HttpStatus.CREATED).body(result);
+    }
+
+    /**
+     * POST /api/attendance/face/control
+     *
+     * Dispatches PAUSE, RESUME, or STOP action to the Python agent over WebSocket.
+     * On STOP, marks the database session COMPLETED and calculates counts.
+     */
+    @PostMapping("/face/control")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN','HOD','TEACHER')")
+    public ResponseEntity<Map<String, Object>> controlFaceAttendanceSession(
+            @Valid @RequestBody FaceControlRequest request) {
+        Map<String, Object> result = attendanceService.controlFaceAttendanceSession(
+                request.getSessionId(),
+                request.getAgentJobId(),
+                request.getAction()
+        );
+        String status = (String) result.getOrDefault("status", "ERROR");
+        if ("ERROR".equals(status)) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(result);
+        }
+        return ResponseEntity.ok(result);
+    }
+
+    @Data
+    public static class FaceControlRequest {
+        @NotNull(message = "sessionId is required")
+        private Long sessionId;
+
+        private String agentJobId;
+
+        @NotBlank(message = "action is required: PAUSE, RESUME, or STOP")
+        private String action;
     }
 }

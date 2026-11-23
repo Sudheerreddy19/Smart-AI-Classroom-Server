@@ -11,6 +11,7 @@ import com.finalYear.smartClassRoom.exception.ResourceNotFoundException;
 import com.finalYear.smartClassRoom.repository.*;
 import com.finalYear.smartClassRoom.service.AttendanceService;
 import com.finalYear.smartClassRoom.service.CurrentUserContextService;
+import com.finalYear.smartClassRoom.websocket.FaceAgentSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,8 +37,11 @@ public class AttendanceServiceImpl implements AttendanceService {
     private final SubjectRepository           subjectRepository;
     private final TeacherRepository           teacherRepository;
     private final StudentRepository           studentRepository;
+    private final TimetableRepository         timetableRepository;
+    private final StudentFaceRepository       studentFaceRepository;
     private final CurrentUserContextService   currentUserCtx;
     private final RestTemplate                restTemplate;
+    private final FaceAgentSessionManager     faceAgentSessionManager;
 
     @Value("${face.service.url:http://localhost:8000}")
     private String faceServiceUrl;
@@ -49,23 +53,111 @@ public class AttendanceServiceImpl implements AttendanceService {
         Classroom classroom = classroomRepository.findById(request.getClassroomId())
                 .orElseThrow(() -> new ResourceNotFoundException("Classroom", request.getClassroomId()));
 
-        Subject subject = subjectRepository.findById(request.getSubjectId())
-                .orElseThrow(() -> new ResourceNotFoundException("Subject", request.getSubjectId()));
+        // Resolve subject, teacher, and timetable slot dynamically if not explicitly provided
+        Timetable resolvedTimetable = null;
+        if (request.getTimetableId() != null) {
+            resolvedTimetable = timetableRepository.findById(request.getTimetableId()).orElse(null);
+        }
 
-        Teacher teacher = teacherRepository.findById(request.getTeacherId())
-                .orElseThrow(() -> new ResourceNotFoundException("Teacher", request.getTeacherId()));
+        if (resolvedTimetable == null && (request.getSubjectId() == null || request.getTeacherId() == null)) {
+            LocalDate today = request.getSessionDate() != null ? request.getSessionDate() : LocalDate.now();
+            LocalTime now = request.getStartTime() != null ? request.getStartTime() : LocalTime.now();
+            Timetable.DayOfWeek dow = switch (today.getDayOfWeek()) {
+                case MONDAY -> Timetable.DayOfWeek.MONDAY;
+                case TUESDAY -> Timetable.DayOfWeek.TUESDAY;
+                case WEDNESDAY -> Timetable.DayOfWeek.WEDNESDAY;
+                case THURSDAY -> Timetable.DayOfWeek.THURSDAY;
+                case FRIDAY -> Timetable.DayOfWeek.FRIDAY;
+                case SATURDAY -> Timetable.DayOfWeek.SATURDAY;
+                default -> null;
+            };
+
+            if (dow != null) {
+                List<Timetable> slots = timetableRepository.findByClassroomAndDayOfWeek(classroom, dow);
+                resolvedTimetable = slots.stream()
+                        .filter(Timetable::isActive)
+                        .filter(t -> !now.isBefore(t.getStartTime()) && !now.isAfter(t.getEndTime()))
+                        .findFirst()
+                        .orElse(null);
+                if (resolvedTimetable == null && !slots.isEmpty()) {
+                    resolvedTimetable = slots.get(0);
+                }
+            }
+        }
+
+        Subject subject;
+        if (request.getSubjectId() != null) {
+            subject = subjectRepository.findById(request.getSubjectId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Subject", request.getSubjectId()));
+        } else if (resolvedTimetable != null && resolvedTimetable.getSubject() != null) {
+            subject = resolvedTimetable.getSubject();
+        } else {
+            // Find first active subject
+            subject = subjectRepository.findAll().stream().findFirst()
+                    .orElseThrow(() -> new RuntimeException("No active subject found in the database."));
+        }
+
+        Teacher teacher;
+        if (request.getTeacherId() != null) {
+            teacher = teacherRepository.findById(request.getTeacherId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Teacher", request.getTeacherId()));
+        } else if (resolvedTimetable != null && resolvedTimetable.getTeacher() != null) {
+            teacher = resolvedTimetable.getTeacher();
+        } else {
+            // Check authenticated teacher or first teacher
+            teacher = teacherRepository.findAll().stream().findFirst()
+                    .orElseThrow(() -> new RuntimeException("No active teacher found in the database."));
+        }
+
+        LocalDate sessionDate = request.getSessionDate() != null ? request.getSessionDate() : LocalDate.now();
+        LocalTime startTime = request.getStartTime() != null ? request.getStartTime() : LocalTime.now();
+
+        // Calculate dynamic total students from actual class roster
+        int totalStudents = 0;
+        if (resolvedTimetable != null && resolvedTimetable.getSection() != null
+                && resolvedTimetable.getSemester() != null
+                && resolvedTimetable.getTeacher() != null
+                && resolvedTimetable.getTeacher().getDepartment() != null) {
+            totalStudents = studentRepository.findByDepartment_IdAndSemester_IdAndSection_IdAndActiveTrue(
+                    resolvedTimetable.getTeacher().getDepartment().getId(),
+                    resolvedTimetable.getSemester().getId(),
+                    resolvedTimetable.getSection().getId()
+            ).size();
+        } else if (resolvedTimetable != null && resolvedTimetable.getSemester() != null
+                && resolvedTimetable.getTeacher() != null
+                && resolvedTimetable.getTeacher().getDepartment() != null) {
+            totalStudents = studentRepository.findByDepartmentAndSemester(
+                    resolvedTimetable.getTeacher().getDepartment(),
+                    resolvedTimetable.getSemester()
+            ).size();
+        }
+
+        if (totalStudents == 0) {
+            if (teacher.getDepartment() != null) {
+                totalStudents = (int) studentRepository.countByDepartment_Id(teacher.getDepartment().getId());
+            }
+            if (totalStudents == 0) {
+                totalStudents = (int) studentRepository.count();
+            }
+        }
 
         AttendanceSession session = AttendanceSession.builder()
+                .timetable(resolvedTimetable)
                 .classroom(classroom)
                 .subject(subject)
                 .teacher(teacher)
-                .sessionDate(request.getSessionDate())
-                .startTime(request.getStartTime())
+                .sessionDate(sessionDate)
+                .startTime(startTime)
                 .status(AttendanceSession.SessionStatus.ACTIVE)
+                .totalStudents(totalStudents)
+                .presentCount(0)
                 .createdAt(LocalDateTime.now())
                 .build();
 
-        return toSessionResponse(attendanceSessionRepository.save(session));
+        AttendanceSession saved = attendanceSessionRepository.save(session);
+        AttendanceSessionResponse resp = toSessionResponse(saved);
+        resp.setTotalStudents(totalStudents);
+        return resp;
     }
 
     @Override
@@ -449,7 +541,10 @@ public class AttendanceServiceImpl implements AttendanceService {
     }
 
     private AttendanceSessionResponse toSessionResponse(AttendanceSession session) {
-        int totalStudents = attendanceRepository.findByAttendanceSession(session).size();
+        int markedCount = attendanceRepository.findByAttendanceSession(session).size();
+        int totalStudents = (session.getTotalStudents() != null && session.getTotalStudents() > 0)
+                ? session.getTotalStudents()
+                : markedCount;
         int present = (int) attendanceRepository.findByAttendanceSession(session)
                 .stream()
                 .filter(a -> a.getStatus() == Attendance.AttendanceStatus.PRESENT)
@@ -469,6 +564,279 @@ public class AttendanceServiceImpl implements AttendanceService {
                 .totalStudents(totalStudents)
                 .presentCount(present)
                 .createdAt(session.getCreatedAt())
+                .build();
+    }
+
+    // ── Voice-Triggered Face Attendance Implementation ─────────────────────────
+
+    @Override
+    @Transactional
+    public Map<String, Object> startFaceAttendanceSession(AttendanceSessionRequest request) {
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        // 1. Check if the Python AI agent is connected before proceeding
+        if (!faceAgentSessionManager.isAgentConnected()) {
+            log.warn("[ATTENDANCE] Cannot start face attendance: Python agent is not connected via /ws/agent");
+            result.put("status",  "AGENT_OFFLINE");
+            result.put("message", "Classroom laptop camera service is offline. Please start the Python agent.");
+            return result;
+        }
+
+        // 2. Create the attendance session in the database using existing logic
+        AttendanceSessionResponse sessionResp;
+        try {
+            sessionResp = createSession(request);
+        } catch (Exception e) {
+            log.error("[ATTENDANCE] Failed to create attendance session: {}", e.getMessage(), e);
+            result.put("status",  "ERROR");
+            result.put("message", "Failed to create attendance session: " + e.getMessage());
+            return result;
+        }
+
+        Long sessionId = sessionResp.getId();
+        String agentJobId = UUID.randomUUID().toString();
+
+        // 3. Retrieve registered students and their face details for this class
+        List<Map<String, Object>> enrolledStudents = new ArrayList<>();
+        AttendanceSession session = attendanceSessionRepository.findById(sessionId).orElse(null);
+        if (session != null) {
+            // Find students for this session
+            List<Student> classStudents = new ArrayList<>();
+            if (session.getTimetable() != null && session.getTimetable().getSection() != null
+                    && session.getTimetable().getSemester() != null
+                    && session.getTeacher() != null && session.getTeacher().getDepartment() != null) {
+                classStudents = studentRepository.findByDepartment_IdAndSemester_IdAndSection_IdAndActiveTrue(
+                        session.getTeacher().getDepartment().getId(),
+                        session.getTimetable().getSemester().getId(),
+                        session.getTimetable().getSection().getId()
+                );
+            } else if (session.getTeacher() != null && session.getTeacher().getDepartment() != null) {
+                classStudents = studentRepository.findByDepartment(session.getTeacher().getDepartment());
+            }
+
+            if (classStudents.isEmpty()) {
+                classStudents = studentRepository.findByActiveTrue();
+            }
+
+            for (Student s : classStudents) {
+                List<StudentFace> faces = studentFaceRepository.findByStudentAndActiveTrue(s);
+                Map<String, Object> sMap = new LinkedHashMap<>();
+                sMap.put("studentId", s.getId());
+                sMap.put("rollNumber", s.getRollNumber());
+                sMap.put("fullName", s.getFullName());
+                if (!faces.isEmpty()) {
+                    sMap.put("encodingPath", faces.get(0).getEncodingPath());
+                    sMap.put("imagePath", faces.get(0).getImagePath());
+                }
+                enrolledStudents.add(sMap);
+            }
+        }
+
+        // 4. Prepare WebSocket payload for the Python agent
+        Map<String, Object> jobPayload = new LinkedHashMap<>();
+        jobPayload.put("type",             "ATTENDANCE_START");
+        jobPayload.put("jobId",            agentJobId);
+        jobPayload.put("sessionId",        sessionId);
+        jobPayload.put("classroomId",      request.getClassroomId());
+        jobPayload.put("subjectId",        sessionResp.getSubjectId());
+        jobPayload.put("teacherId",        sessionResp.getTeacherId());
+        jobPayload.put("subjectName",      sessionResp.getSubjectName());
+        jobPayload.put("roomNumber",       sessionResp.getRoomNumber());
+        jobPayload.put("totalStudents",    sessionResp.getTotalStudents());
+        jobPayload.put("enrolledStudents", enrolledStudents);
+
+        try {
+            faceAgentSessionManager.sendCommand(jobPayload);
+            log.info("[ATTENDANCE] Dispatched ATTENDANCE_START to agent: sessionId={}, agentJobId={}, studentsCount={}",
+                    sessionId, agentJobId, enrolledStudents.size());
+
+            result.put("status",        "STARTED");
+            result.put("sessionId",     sessionId);
+            result.put("agentJobId",    agentJobId);
+            result.put("subjectName",   sessionResp.getSubjectName());
+            result.put("roomNumber",    sessionResp.getRoomNumber());
+            result.put("totalStudents", sessionResp.getTotalStudents());
+            if (session != null && session.getTimetable() != null) {
+                if (session.getTimetable().getSemester() != null) {
+                    result.put("semesterName", session.getTimetable().getSemester().getName());
+                }
+                if (session.getTimetable().getSection() != null) {
+                    result.put("sectionName", session.getTimetable().getSection().getName());
+                }
+            }
+            result.put("message",       "Attendance session #" + sessionId + " started. Camera opening on laptop.");
+        } catch (Exception e) {
+            log.error("[ATTENDANCE] Error dispatching ATTENDANCE_START to agent: {}", e.getMessage(), e);
+            result.put("status",    "ERROR");
+            result.put("sessionId", sessionId);
+            result.put("message",   "Session created, but failed to signal camera: " + e.getMessage());
+        }
+
+        return result;
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> controlFaceAttendanceSession(Long sessionId, String agentJobId, String action) {
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        if (action == null || (!action.equals("PAUSE") && !action.equals("RESUME") && !action.equals("STOP"))) {
+            result.put("status",    "ERROR");
+            result.put("message",   "Invalid action. Use PAUSE, RESUME, or STOP.");
+            result.put("sessionId", sessionId);
+            result.put("action",    action);
+            return result;
+        }
+
+        AttendanceSession session = attendanceSessionRepository.findById(sessionId).orElse(null);
+        if (session == null) {
+            result.put("status",    "ERROR");
+            result.put("message",   "Attendance session #" + sessionId + " not found.");
+            result.put("sessionId", sessionId);
+            result.put("action",    action);
+            return result;
+        }
+
+        if ("STOP".equals(action) && session.getStatus() == AttendanceSession.SessionStatus.COMPLETED) {
+            result.put("status",        "OK");
+            result.put("message",       "Session is already completed.");
+            result.put("sessionId",     sessionId);
+            result.put("action",        action);
+            result.put("presentCount",  session.getPresentCount());
+            result.put("totalStudents", attendanceRepository.findByAttendanceSession(session).size());
+            return result;
+        }
+
+        boolean agentCommandSent = false;
+        if (faceAgentSessionManager.isAgentConnected()) {
+            try {
+                Map<String, Object> cmd = new LinkedHashMap<>();
+                cmd.put("type",      "ATTENDANCE_" + action);
+                cmd.put("sessionId", sessionId);
+                if (agentJobId != null && !agentJobId.isBlank()) {
+                    cmd.put("jobId", agentJobId);
+                }
+                faceAgentSessionManager.sendCommand(cmd);
+                agentCommandSent = true;
+                log.info("[ATTENDANCE] Control command ATTENDANCE_{} sent to agent for session={}", action, sessionId);
+            } catch (Exception e) {
+                log.warn("[ATTENDANCE] Failed to send {} to agent: {}", action, e.getMessage());
+            }
+        } else {
+            log.warn("[ATTENDANCE] Agent offline — control command {} not delivered for session={}", action, sessionId);
+        }
+
+        if ("STOP".equals(action)) {
+            try {
+                AttendanceSessionResponse closed = closeSession(sessionId);
+                int totalStudents = closed.getTotalStudents() != null ? closed.getTotalStudents() : 0;
+                int presentCount  = closed.getPresentCount()  != null ? closed.getPresentCount()  : 0;
+
+                result.put("status",        "OK");
+                result.put("message",       agentCommandSent
+                        ? "Attendance completed. Camera stopped."
+                        : "Attendance session closed (agent was offline).");
+                result.put("sessionId",     sessionId);
+                result.put("action",        action);
+                result.put("presentCount",  presentCount);
+                result.put("totalStudents", totalStudents);
+                log.info("[ATTENDANCE] Session {} closed: present={} total={}", sessionId, presentCount, totalStudents);
+            } catch (Exception e) {
+                result.put("status",    "ERROR");
+                result.put("message",   "Failed to close session: " + e.getMessage());
+                result.put("sessionId", sessionId);
+                result.put("action",    action);
+            }
+        } else {
+            result.put("status",    "OK");
+            result.put("message",   "Command " + action + " sent to agent.");
+            result.put("sessionId", sessionId);
+            result.put("action",    action);
+        }
+
+        return result;
+    }
+
+    @Override
+    @Transactional
+    public FaceAttendanceResult markRecognizedStudent(Long sessionId, String rollNumber, Double confidence) {
+        return markRecognizedStudent(sessionId, null, rollNumber, confidence);
+    }
+
+    @Override
+    @Transactional
+    public FaceAttendanceResult markRecognizedStudent(Long sessionId, Long studentDbId, String rollNumber, Double confidence) {
+        AttendanceSession session = attendanceSessionRepository.findById(sessionId).orElse(null);
+        if (session == null) {
+            return FaceAttendanceResult.builder()
+                    .success(false).code("SESSION_NOT_FOUND")
+                    .message("Attendance session #" + sessionId + " not found.")
+                    .build();
+        }
+
+        if (session.getStatus() != AttendanceSession.SessionStatus.ACTIVE) {
+            return FaceAttendanceResult.builder()
+                    .success(false).code("SESSION_CLOSED")
+                    .message("Session #" + sessionId + " is not active (status: " + session.getStatus() + ").")
+                    .build();
+        }
+
+        Student student = null;
+        if (studentDbId != null) {
+            student = studentRepository.findById(studentDbId).orElse(null);
+        }
+        if (student == null && rollNumber != null && !rollNumber.isBlank()) {
+            student = studentRepository.findByRollNumber(rollNumber).orElse(null);
+        }
+
+        if (student == null) {
+            log.warn("[ATTENDANCE] markRecognizedStudent: student not found: id={} roll={}", studentDbId, rollNumber);
+            return FaceAttendanceResult.builder()
+                    .success(false).code("STUDENT_NOT_FOUND")
+                    .studentId(rollNumber != null ? rollNumber : String.valueOf(studentDbId))
+                    .message("Student not found in database.")
+                    .build();
+        }
+
+        // Duplicate prevention via existing unique constraint query
+        boolean alreadyMarked = attendanceRepository
+                .findByAttendanceSessionAndStudent(session, student).isPresent();
+        if (alreadyMarked) {
+            return FaceAttendanceResult.builder()
+                    .success(false).code("DUPLICATE")
+                    .studentId(student.getRollNumber())
+                    .studentName(student.getFullName())
+                    .dbStudentId(student.getId())
+                    .message(student.getFullName() + " is already marked PRESENT in this session.")
+                    .build();
+        }
+
+        // Save attendance record using existing entity
+        Attendance attendance = Attendance.builder()
+                .attendanceSession(session)
+                .student(student)
+                .status(Attendance.AttendanceStatus.PRESENT)
+                .method(Attendance.MarkingMethod.FACE_RECOGNITION)
+                .confidenceScore(confidence)
+                .markedAt(LocalDateTime.now())
+                .build();
+        attendanceRepository.save(attendance);
+
+        // Update session present count
+        session.setPresentCount(session.getPresentCount() + 1);
+        attendanceSessionRepository.save(session);
+
+        log.info("[ATTENDANCE] markRecognizedStudent: PRESENT id={} roll={} name='{}' session={}",
+                student.getId(), student.getRollNumber(), student.getFullName(), sessionId);
+
+        return FaceAttendanceResult.builder()
+                .success(true).code("MARKED")
+                .studentId(student.getRollNumber())
+                .studentName(student.getFullName())
+                .dbStudentId(student.getId())
+                .status(Attendance.AttendanceStatus.PRESENT)
+                .markedAt(LocalDateTime.now())
+                .message(student.getFullName() + " marked PRESENT via face recognition.")
                 .build();
     }
 }

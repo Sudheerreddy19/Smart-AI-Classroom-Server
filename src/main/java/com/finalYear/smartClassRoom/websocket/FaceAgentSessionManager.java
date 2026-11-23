@@ -1,6 +1,7 @@
 package com.finalYear.smartClassRoom.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -23,6 +24,12 @@ public class FaceAgentSessionManager {
     private volatile WebSocketSession agentSession;
     private volatile String agentId;
     private volatile Instant lastHeartbeat;
+
+    @Getter
+    private volatile String cameraStatus = "UNKNOWN";
+
+    @Getter
+    private volatile String cameraMessage = "";
 
     // Pending capture jobs: jobId -> CompletableFuture<Map<String, Object>>
     private final ConcurrentHashMap<String, CompletableFuture<Map<String, Object>>> pendingJobs = new ConcurrentHashMap<>();
@@ -48,6 +55,8 @@ public class FaceAgentSessionManager {
             log.warn("[AGENT-WS] Python AI Agent disconnected: agentId={}, sessionId={}", agentId, session.getId());
             this.agentSession = null;
             this.agentId = null;
+            this.cameraStatus = "DISCONNECTED";
+            this.cameraMessage = "Python agent disconnected";
 
             // Fail all pending jobs with agent disconnection error
             if (!pendingJobs.isEmpty()) {
@@ -74,6 +83,12 @@ public class FaceAgentSessionManager {
 
     public void updateHeartbeat() {
         this.lastHeartbeat = Instant.now();
+    }
+
+    public void updateCameraStatus(String status, String message) {
+        this.cameraStatus = status != null ? status : "UNKNOWN";
+        this.cameraMessage = message != null ? message : "";
+        log.debug("[AGENT-WS] Camera status updated: {} — {}", this.cameraStatus, this.cameraMessage);
     }
 
     public CompletableFuture<Map<String, Object>> dispatchJob(Map<String, Object> jobPayload, long timeoutSeconds) {
@@ -122,6 +137,29 @@ public class FaceAgentSessionManager {
             future.complete(result);
         } else {
             log.warn("[AGENT-WS] Received result for unknown or already completed job: jobId={}", jobId);
+        }
+    }
+
+    /**
+     * Fire-and-forget command to the Python agent over WebSocket.
+     * Used for ATTENDANCE_START, ATTENDANCE_PAUSE, ATTENDANCE_RESUME, ATTENDANCE_STOP.
+     */
+    public void sendCommand(Map<String, Object> payload) {
+        WebSocketSession session = this.agentSession;
+        if (session == null || !session.isOpen()) {
+            throw new IllegalStateException(
+                    "Face recognition service is not connected. " +
+                    "Please ensure the Python Class AI service is running on your classroom laptop.");
+        }
+        try {
+            String json = objectMapper.writeValueAsString(payload);
+            synchronized (session) {
+                session.sendMessage(new TextMessage(json));
+            }
+            log.info("[AGENT-WS] Sent command type={} to agent", payload.get("type"));
+        } catch (Exception e) {
+            log.error("[AGENT-WS] Failed to send command to agent: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to send command to Python agent: " + e.getMessage(), e);
         }
     }
 }

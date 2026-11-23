@@ -38,8 +38,9 @@ public class ClassroomToolsController {
     @GetMapping(value = {"/sensors", "/sensors/{classroomId}"})
     public ResponseEntity<Map<String, Object>> getSensorReadings(
             @PathVariable(required = false) Long classroomId,
-            @RequestParam(required = false) Long queryClassroomId) {
-        Long id = classroomId != null ? classroomId : queryClassroomId;
+            @RequestParam(required = false) Long queryClassroomId,
+            @RequestParam(name = "classroomId", required = false) Long reqClassroomId) {
+        Long id = classroomId != null ? classroomId : (reqClassroomId != null ? reqClassroomId : queryClassroomId);
         return ResponseEntity.ok(toolsService.getCurrentSensorReadings(id));
     }
 
@@ -73,8 +74,9 @@ public class ClassroomToolsController {
     public ResponseEntity<Map<String, Object>> getAttendanceSummary(
             @PathVariable(required = false) Long classroomId,
             @RequestParam(required = false) Long queryClassroomId,
+            @RequestParam(name = "classroomId", required = false) Long reqClassroomId,
             @RequestParam(required = false) String date) {
-        Long id = classroomId != null ? classroomId : queryClassroomId;
+        Long id = classroomId != null ? classroomId : (reqClassroomId != null ? reqClassroomId : queryClassroomId);
         return ResponseEntity.ok(toolsService.getAttendanceSummary(id, date));
     }
 
