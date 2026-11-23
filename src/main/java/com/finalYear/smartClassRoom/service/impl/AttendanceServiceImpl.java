@@ -42,6 +42,7 @@ public class AttendanceServiceImpl implements AttendanceService {
     private final CurrentUserContextService   currentUserCtx;
     private final RestTemplate                restTemplate;
     private final FaceAgentSessionManager     faceAgentSessionManager;
+    private final NotificationService         notificationService;
 
     @Value("${face.service.url:http://localhost:8000}")
     private String faceServiceUrl;
@@ -111,6 +112,9 @@ public class AttendanceServiceImpl implements AttendanceService {
 
         LocalDate sessionDate = request.getSessionDate() != null ? request.getSessionDate() : LocalDate.now();
         LocalTime startTime = request.getStartTime() != null ? request.getStartTime() : LocalTime.now();
+        LocalTime endTime = resolvedTimetable != null && resolvedTimetable.getEndTime() != null
+                ? resolvedTimetable.getEndTime()
+                : startTime.plusHours(1); // default 1 hour period
 
         // Calculate dynamic total students from actual class roster
         int totalStudents = 0;
@@ -148,6 +152,7 @@ public class AttendanceServiceImpl implements AttendanceService {
                 .teacher(teacher)
                 .sessionDate(sessionDate)
                 .startTime(startTime)
+                .endTime(endTime)
                 .status(AttendanceSession.SessionStatus.ACTIVE)
                 .totalStudents(totalStudents)
                 .presentCount(0)
@@ -170,7 +175,78 @@ public class AttendanceServiceImpl implements AttendanceService {
         session.setEndTime(LocalTime.now());
         session.setStatus(AttendanceSession.SessionStatus.COMPLETED);
 
-        return toSessionResponse(attendanceSessionRepository.save(session));
+        // 1. Identify all enrolled students for this class roster
+        List<Student> enrolledStudents = new ArrayList<>();
+        if (session.getTimetable() != null && session.getTimetable().getSection() != null
+                && session.getTimetable().getSemester() != null
+                && session.getTeacher() != null && session.getTeacher().getDepartment() != null) {
+            enrolledStudents = studentRepository.findByDepartment_IdAndSemester_IdAndSection_IdAndActiveTrue(
+                    session.getTeacher().getDepartment().getId(),
+                    session.getTimetable().getSemester().getId(),
+                    session.getTimetable().getSection().getId()
+            );
+        } else if (session.getTeacher() != null && session.getTeacher().getDepartment() != null) {
+            enrolledStudents = studentRepository.findByDepartment(session.getTeacher().getDepartment());
+        }
+
+        if (enrolledStudents.isEmpty()) {
+            enrolledStudents = studentRepository.findByActiveTrue();
+        }
+
+        // 2. Identify students who already have an attendance record for this session
+        List<Attendance> existingRecords = attendanceRepository.findByAttendanceSession(session);
+        Set<Long> recordedStudentIds = existingRecords.stream()
+                .map(a -> a.getStudent().getId())
+                .collect(Collectors.toSet());
+
+        // 3. Mark all remaining enrolled students as ABSENT
+        List<Attendance> absentRecords = new ArrayList<>();
+        for (Student student : enrolledStudents) {
+            if (!recordedStudentIds.contains(student.getId())) {
+                Attendance absent = Attendance.builder()
+                        .attendanceSession(session)
+                        .student(student)
+                        .status(Attendance.AttendanceStatus.ABSENT)
+                        .method(Attendance.AttendanceMethod.MANUAL)
+                        .confidenceScore(0.0)
+                        .markedAt(LocalDateTime.now())
+                        .build();
+                absentRecords.add(absent);
+            }
+        }
+
+        if (!absentRecords.isEmpty()) {
+            attendanceRepository.saveAll(absentRecords);
+            log.info("[ATTENDANCE] Marked {} absentees for session #{}", absentRecords.size(), sessionId);
+        }
+
+        // Recalculate counts
+        long presentCount = attendanceRepository.countByAttendanceSessionAndStatus(
+                session, Attendance.AttendanceStatus.PRESENT);
+        session.setPresentCount((int) presentCount);
+        session.setTotalStudents(enrolledStudents.size());
+        AttendanceSession saved = attendanceSessionRepository.save(session);
+
+        // 4. Send comprehensive Attendance Report Notification to ADMIN and TEACHER
+        try {
+            int absentCount = (int) (saved.getTotalStudents() - presentCount);
+            String subjectName = saved.getSubject() != null ? saved.getSubject().getName() : "Subject";
+            String roomNumber = saved.getClassroom() != null ? saved.getClassroom().getRoomNumber() : "Room";
+            String teacherName = saved.getTeacher() != null ? saved.getTeacher().getFullName() : "Teacher";
+
+            com.finalYear.smartClassRoom.dto.request.NotificationRequest notif = new com.finalYear.smartClassRoom.dto.request.NotificationRequest();
+            notif.setTitle("Attendance Report: " + subjectName + " (" + roomNumber + ")");
+            notif.setMessage(String.format("Session #%d completed by %s. Total: %d, Present: %d, Absent: %d.",
+                    sessionId, teacherName, saved.getTotalStudents(), presentCount, absentCount));
+            notif.setType(Notification.NotificationType.INFO);
+            notif.setTargetRole(User.Role.ADMIN);
+            notificationService.create(notif);
+            log.info("[ATTENDANCE] Sent attendance report notification to ADMIN for session #{}", sessionId);
+        } catch (Exception e) {
+            log.warn("[ATTENDANCE] Could not create attendance report notification: {}", e.getMessage());
+        }
+
+        return toSessionResponse(saved);
     }
 
     @Override
