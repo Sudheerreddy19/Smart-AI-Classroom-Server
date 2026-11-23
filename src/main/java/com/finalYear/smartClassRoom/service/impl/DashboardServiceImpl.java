@@ -27,7 +27,13 @@ public class DashboardServiceImpl implements DashboardService {
 
     @Override
     public DashboardResponse getDashboardStats() {
-        User.Role role = currentUserCtx.getCallerRole();
+        User.Role role = null;
+        try {
+            role = currentUserCtx.getCallerRole();
+        } catch (Exception e) {
+            // Anonymous / kiosk caller: treat as global overview
+            role = User.Role.SUPER_ADMIN;
+        }
 
         long totalStudents;
         long totalTeachers;
