@@ -201,8 +201,13 @@ public class SecurityConfig {
                     .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER", "STUDENT")
 
                 // ── Dashboard ─────────────────────────────────────────────────
-                // Note: GET /api/dashboard/** is already permitAll above for kiosk
-                .requestMatchers("/api/dashboard/**")
+                // Note: GET /api/dashboard/** is already permitAll above for kiosk.
+                // Only non-GET methods require authentication here.
+                .requestMatchers(HttpMethod.POST, "/api/dashboard/**")
+                    .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER", "STUDENT")
+                .requestMatchers(HttpMethod.PUT, "/api/dashboard/**")
+                    .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER", "STUDENT")
+                .requestMatchers(HttpMethod.DELETE, "/api/dashboard/**")
                     .hasAnyRole("SUPER_ADMIN", "ADMIN", "HOD", "TEACHER", "STUDENT")
 
                 // ── AI ────────────────────────────────────────────────────────
