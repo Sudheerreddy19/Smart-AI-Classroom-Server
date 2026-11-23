@@ -66,6 +66,9 @@ public class TeacherServiceImpl implements TeacherService {
         User user = User.builder()
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
+                .firstName(request.getFirstName())
+                .lastName(request.getLastName())
+                .phone(request.getPhone())
                 .role(User.Role.TEACHER)
                 .enabled(true)
                 .build();
