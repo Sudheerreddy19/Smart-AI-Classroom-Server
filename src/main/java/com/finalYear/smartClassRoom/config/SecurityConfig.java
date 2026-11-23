@@ -83,6 +83,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/ai/**").permitAll()
                 .requestMatchers("/api/ai/sessions/**").permitAll()
                 .requestMatchers("/api/ai/tools/**").permitAll()
+                // Voice-triggered Face Attendance & Session endpoints — public for classroom kiosk assistant
+                .requestMatchers("/api/attendance/face/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/attendance/sessions/**", "/api/attendance/session/**").permitAll()
                 // Knowledge base read (RAG search) — public for kiosk Q&A
                 .requestMatchers(HttpMethod.GET, "/api/knowledge/documents").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/knowledge/search").permitAll()

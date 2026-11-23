@@ -153,7 +153,6 @@ public class AttendanceController {
      * to open the webcam and begin recognition.
      */
     @PostMapping("/face/start-session")
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN','HOD','TEACHER')")
     public ResponseEntity<Map<String, Object>> startFaceAttendanceSession(
             @Valid @RequestBody AttendanceSessionRequest request) {
         Map<String, Object> result = attendanceService.startFaceAttendanceSession(request);
@@ -174,7 +173,6 @@ public class AttendanceController {
      * On STOP, marks the database session COMPLETED and calculates counts.
      */
     @PostMapping("/face/control")
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN','HOD','TEACHER')")
     public ResponseEntity<Map<String, Object>> controlFaceAttendanceSession(
             @Valid @RequestBody FaceControlRequest request) {
         Map<String, Object> result = attendanceService.controlFaceAttendanceSession(
