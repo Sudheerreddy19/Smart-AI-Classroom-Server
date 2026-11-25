@@ -11,6 +11,7 @@ import com.finalYear.smartClassRoom.exception.ResourceNotFoundException;
 import com.finalYear.smartClassRoom.repository.*;
 import com.finalYear.smartClassRoom.service.AttendanceService;
 import com.finalYear.smartClassRoom.service.CurrentUserContextService;
+import com.finalYear.smartClassRoom.service.NotificationService;
 import com.finalYear.smartClassRoom.websocket.FaceAgentSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -207,7 +208,7 @@ public class AttendanceServiceImpl implements AttendanceService {
                         .attendanceSession(session)
                         .student(student)
                         .status(Attendance.AttendanceStatus.ABSENT)
-                        .method(Attendance.AttendanceMethod.MANUAL)
+                        .method(Attendance.MarkingMethod.MANUAL)
                         .confidenceScore(0.0)
                         .markedAt(LocalDateTime.now())
                         .build();

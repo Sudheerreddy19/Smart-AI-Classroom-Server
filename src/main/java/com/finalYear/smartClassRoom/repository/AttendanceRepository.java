@@ -21,4 +21,8 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
 
     List<Attendance> findByStatus(Attendance.AttendanceStatus status);
 
+    long countByAttendanceSessionAndStatus(
+            AttendanceSession attendanceSession,
+            Attendance.AttendanceStatus status);
+
 }
