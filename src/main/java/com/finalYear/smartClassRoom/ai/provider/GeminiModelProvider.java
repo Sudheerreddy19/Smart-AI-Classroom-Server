@@ -53,29 +53,60 @@ public class GeminiModelProvider implements AIModelProvider {
 
     @Override
     public String generateResponse(String systemPrompt, String userPrompt) {
+        return generateResponseWithHistory(systemPrompt, userPrompt, java.util.Collections.emptyList());
+    }
+
+    /**
+     * Multi-turn chat generation with conversation history mapped to Gemini user/model roles.
+     */
+    public String generateResponseWithHistory(String systemPrompt, String userPrompt, List<Map<String, String>> history) {
         if (apiKey == null || apiKey.isBlank()) {
             return "AI service authentication error. API key is not configured.";
         }
 
         String url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
 
-        String combinedText = (systemPrompt != null && !systemPrompt.isBlank())
-                ? systemPrompt + "\n\nUser Question: " + userPrompt
+        List<Map<String, Object>> contentsList = new java.util.ArrayList<>();
+
+        // 1. Add previous conversation turns (limited to last 5 turns to preserve tokens)
+        if (history != null && !history.isEmpty()) {
+            int startIdx = Math.max(0, history.size() - 5);
+            for (int i = startIdx; i < history.size(); i++) {
+                Map<String, String> turn = history.get(i);
+                String role = turn.getOrDefault("role", "user");
+                String geminiRole = "assistant".equalsIgnoreCase(role) || "jarvis".equalsIgnoreCase(role) || "model".equalsIgnoreCase(role)
+                        ? "model"
+                        : "user";
+                String text = turn.getOrDefault("content", turn.getOrDefault("text", ""));
+                if (!text.isBlank()) {
+                    contentsList.add(Map.of(
+                            "role", geminiRole,
+                            "parts", List.of(Map.of("text", text))
+                    ));
+                }
+            }
+        }
+
+        // 2. Add current turn with system instructions injected if needed
+        String currentTurnText = (systemPrompt != null && !systemPrompt.isBlank())
+                ? (contentsList.isEmpty() ? (systemPrompt + "\n\nUser Question: " + userPrompt) : userPrompt)
                 : userPrompt;
 
-        Map<String, Object> bodyMap = Map.of(
-                "contents", List.of(
-                        Map.of(
-                                "role", "user",
-                                "parts", List.of(
-                                        Map.of("text", combinedText)
-                                )
-                        )
-                ),
-                "generationConfig", Map.of(
-                        "temperature", temperature
-                )
-        );
+        contentsList.add(Map.of(
+                "role", "user",
+                "parts", List.of(Map.of("text", currentTurnText))
+        ));
+
+        Map<String, Object> bodyMap = new java.util.HashMap<>();
+        bodyMap.put("contents", contentsList);
+        bodyMap.put("generationConfig", Map.of("temperature", temperature));
+
+        // Use systemInstruction object if systemPrompt is present and history exists
+        if (systemPrompt != null && !systemPrompt.isBlank() && !contentsList.isEmpty()) {
+            bodyMap.put("systemInstruction", Map.of(
+                    "parts", List.of(Map.of("text", systemPrompt))
+            ));
+        }
 
         String jsonPayload;
         try {

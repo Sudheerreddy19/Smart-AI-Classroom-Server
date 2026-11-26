@@ -27,6 +27,13 @@ public class DelegatingAIProvider implements AIModelProvider {
 
     @Override
     public String generateResponse(String systemPrompt, String userPrompt) {
+        return generateResponseWithHistory(systemPrompt, userPrompt, java.util.Collections.emptyList());
+    }
+
+    /**
+     * Delegates multi-turn generation to Gemini or Ollama.
+     */
+    public String generateResponseWithHistory(String systemPrompt, String userPrompt, java.util.List<java.util.Map<String, String>> history) {
         if ("ollama".equalsIgnoreCase(configuredProvider)) {
             String ollamaResponse = ollamaProvider.generateResponse(systemPrompt, userPrompt);
             if (ollamaResponse != null && !ollamaResponse.isBlank()
@@ -34,11 +41,10 @@ public class DelegatingAIProvider implements AIModelProvider {
                 return ollamaResponse;
             }
             log.warn("Ollama unavailable, falling back to Gemini cloud model");
-            return geminiProvider.generateResponse(systemPrompt, userPrompt);
+            return geminiProvider.generateResponseWithHistory(systemPrompt, userPrompt, history);
         } else {
-            // Default: Gemini Cloud Provider
-            String geminiResponse = geminiProvider.generateResponse(systemPrompt, userPrompt);
-            // If Gemini returned a connection failure and Ollama is running locally, attempt fallback
+            // Default: Gemini Cloud Provider with multi-turn support
+            String geminiResponse = geminiProvider.generateResponseWithHistory(systemPrompt, userPrompt, history);
             if (geminiResponse.startsWith("Unable to reach the AI cloud service") && ollamaProvider.isAvailable()) {
                 log.info("Gemini cloud unreachable, falling back to local Ollama");
                 String fallback = ollamaProvider.generateResponse(systemPrompt, userPrompt);

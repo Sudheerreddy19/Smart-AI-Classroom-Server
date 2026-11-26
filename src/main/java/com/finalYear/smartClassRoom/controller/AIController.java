@@ -54,6 +54,11 @@ public class AIController {
         AIQueryRequest request = new AIQueryRequest();
         request.setPrompt(question);
         request.setQueryType(com.finalYear.smartClassRoom.entity.AIQuery.QueryType.GENERAL);
+        if (body.containsKey("sessionId")) {
+            try {
+                request.setSessionId(Long.parseLong(String.valueOf(body.get("sessionId"))));
+            } catch (Exception ignored) {}
+        }
 
         AIQueryResponse response = aiService.processQuery(userId, request);
         return ResponseEntity.ok(Map.of(

@@ -64,13 +64,34 @@ public class AIServiceImpl implements AIService {
                         .orElse(newSession(user, request.getSessionTitle()))
                 : newSession(user, request.getSessionTitle());
 
-        // Build the standardised agent request
+        // Retrieve previous conversation turns from session for multi-turn contextual memory
+        java.util.List<java.util.Map<String, String>> conversationHistory = new java.util.ArrayList<>();
+        try {
+            java.util.List<AIQuery> pastQueries = aiQueryRepository.findBySession(session);
+            if (pastQueries != null && !pastQueries.isEmpty()) {
+                int start = Math.max(0, pastQueries.size() - 5);
+                for (int i = start; i < pastQueries.size(); i++) {
+                    AIQuery q = pastQueries.get(i);
+                    if (q.getPrompt() != null && !q.getPrompt().isBlank()) {
+                        conversationHistory.add(java.util.Map.of("role", "user", "text", q.getPrompt()));
+                    }
+                    if (q.getResponse() != null && !q.getResponse().isBlank()) {
+                        conversationHistory.add(java.util.Map.of("role", "model", "text", q.getResponse()));
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("Could not load past queries for conversation history: {}", ex.getMessage());
+        }
+
+        // Build the standardised agent request with conversation history
         AgentRequest agentReq = AgentRequest.builder()
                 .userId(userId)
                 .role(user.getRole())
                 .prompt(request.getPrompt().trim())
                 .sessionId(session.getId())
                 .subjectContext(request.getSubjectContext())
+                .conversationHistory(conversationHistory)
                 .build();
 
         // Route through the AI Orchestrator

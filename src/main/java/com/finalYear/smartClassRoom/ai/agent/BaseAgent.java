@@ -24,6 +24,20 @@ public abstract class BaseAgent {
     }
 
     /**
+     * Extended invocation point supporting multi-turn conversation history.
+     */
+    protected String callAIWithHistory(String systemPrompt, String userPrompt, java.util.List<java.util.Map<String, String>> history) {
+        if (aiModelProvider == null) {
+            log.error("AIModelProvider is not injected in {}", agentName());
+            return "AI service is currently not initialized.";
+        }
+        if (aiModelProvider instanceof com.finalYear.smartClassRoom.ai.provider.DelegatingAIProvider delegator) {
+            return delegator.generateResponseWithHistory(systemPrompt, userPrompt, history);
+        }
+        return aiModelProvider.generateResponse(systemPrompt, userPrompt);
+    }
+
+    /**
      * Preserved for backward compatibility with all child agents.
      * Delegates directly to callAI.
      */
