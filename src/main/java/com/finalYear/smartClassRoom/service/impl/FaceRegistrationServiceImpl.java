@@ -194,7 +194,16 @@ public class FaceRegistrationServiceImpl implements FaceRegistrationService {
                             .build();
                 }
 
-                throw new RuntimeException("Face capture failed: " + msg);
+                // ── Return structured failure response instead of throwing 500 error ──
+                log.warn("Face registration failed for studentId={}: [{}] {}", studentId, errCode, msg);
+                return FaceRegistrationResponse.builder()
+                        .studentId(studentId)
+                        .rollNumber(student.getRollNumber())
+                        .studentName(student.getFullName())
+                        .success(false)
+                        .errorCode(errCode != null ? errCode : "CAPTURE_FAILED")
+                        .message(msg)
+                        .build();
             }
 
             // Extract response data safely (handling both camelCase and snake_case)
@@ -247,12 +256,35 @@ public class FaceRegistrationServiceImpl implements FaceRegistrationService {
                     .build();
 
         } catch (IllegalStateException e) {
-            throw e;
+            log.error("State error during face registration for studentId={}: {}", studentId, e.getMessage());
+            return FaceRegistrationResponse.builder()
+                    .studentId(studentId)
+                    .rollNumber(student.getRollNumber())
+                    .studentName(student.getFullName())
+                    .success(false)
+                    .errorCode("SERVICE_UNAVAILABLE")
+                    .message(e.getMessage())
+                    .build();
         } catch (RuntimeException e) {
-            throw e;
+            log.error("Runtime error during face registration for studentId={}: {}", studentId, e.getMessage());
+            return FaceRegistrationResponse.builder()
+                    .studentId(studentId)
+                    .rollNumber(student.getRollNumber())
+                    .studentName(student.getFullName())
+                    .success(false)
+                    .errorCode("CAPTURE_FAILED")
+                    .message(e.getMessage())
+                    .build();
         } catch (Exception e) {
-            log.error("Error during face registration for studentId={}: {}", studentId, e.getMessage(), e);
-            throw new RuntimeException("Face capture error: " + e.getMessage());
+            log.error("Unexpected error during face registration for studentId={}: {}", studentId, e.getMessage(), e);
+            return FaceRegistrationResponse.builder()
+                    .studentId(studentId)
+                    .rollNumber(student.getRollNumber())
+                    .studentName(student.getFullName())
+                    .success(false)
+                    .errorCode("INTERNAL_ERROR")
+                    .message("Face capture error: " + e.getMessage())
+                    .build();
         }
     }
 
