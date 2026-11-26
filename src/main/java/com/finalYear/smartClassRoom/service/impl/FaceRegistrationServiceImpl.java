@@ -57,6 +57,12 @@ public class FaceRegistrationServiceImpl implements FaceRegistrationService {
     @Override
     @Transactional
     public FaceRegistrationResponse registerFace(Long studentId, User caller) {
+        return registerFace(studentId, null, caller);
+    }
+
+    @Override
+    @Transactional
+    public FaceRegistrationResponse registerFace(Long studentId, Integer cameraIndex, User caller) {
         Student student = studentRepository.findById(studentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Student", studentId));
 
@@ -89,6 +95,9 @@ public class FaceRegistrationServiceImpl implements FaceRegistrationService {
         jobPayload.put("section",        student.getSection()    != null ? student.getSection().getName() : "");
         jobPayload.put("teacher_id",     finalTeacher != null ? String.valueOf(finalTeacher.getId()) : null);
         jobPayload.put("teacherId",      finalTeacher != null ? finalTeacher.getId() : null);
+        if (cameraIndex != null) {
+            jobPayload.put("cameraIndex", cameraIndex);
+        }
 
         Map<String, Object> response;
 

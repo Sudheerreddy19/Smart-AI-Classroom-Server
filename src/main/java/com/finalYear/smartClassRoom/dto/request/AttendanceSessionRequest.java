@@ -21,4 +21,6 @@ public class AttendanceSessionRequest {
     private LocalDate sessionDate;
 
     private LocalTime startTime;
+
+    private Integer cameraIndex;
 }

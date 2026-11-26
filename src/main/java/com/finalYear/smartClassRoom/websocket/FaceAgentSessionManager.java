@@ -109,6 +109,9 @@ public class FaceAgentSessionManager {
         try {
             String json = objectMapper.writeValueAsString(jobPayload);
             synchronized (session) {
+                if (!session.isOpen()) {
+                    throw new IllegalStateException("WebSocket session closed before job dispatch");
+                }
                 session.sendMessage(new TextMessage(json));
             }
             log.info("[AGENT-WS] Dispatched CAPTURE_JOB to agent: jobId={}, studentDbId={}",
@@ -154,6 +157,9 @@ public class FaceAgentSessionManager {
         try {
             String json = objectMapper.writeValueAsString(payload);
             synchronized (session) {
+                if (!session.isOpen()) {
+                    throw new IllegalStateException("WebSocket session closed before command dispatch");
+                }
                 session.sendMessage(new TextMessage(json));
             }
             log.info("[AGENT-WS] Sent command type={} to agent", payload.get("type"));

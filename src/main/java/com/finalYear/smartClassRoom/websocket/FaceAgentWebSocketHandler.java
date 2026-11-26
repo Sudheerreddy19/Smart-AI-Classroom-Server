@@ -247,10 +247,16 @@ public class FaceAgentWebSocketHandler extends TextWebSocketHandler {
         sessionManager.removeSession(session);
     }
 
-    private void sendJson(WebSocketSession session, Map<String, Object> payload) throws IOException {
-        if (session.isOpen()) {
+    private void sendJson(WebSocketSession session, Map<String, Object> payload) {
+        if (session != null && session.isOpen()) {
             synchronized (session) {
-                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(payload)));
+                if (session.isOpen()) {
+                    try {
+                        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(payload)));
+                    } catch (IllegalStateException | IOException e) {
+                        log.warn("[AGENT-WS] Failed to send message to session {}: {}", session.getId(), e.getMessage());
+                    }
+                }
             }
         }
     }

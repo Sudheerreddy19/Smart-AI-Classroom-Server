@@ -721,6 +721,9 @@ public class AttendanceServiceImpl implements AttendanceService {
         jobPayload.put("roomNumber",       sessionResp.getRoomNumber());
         jobPayload.put("totalStudents",    sessionResp.getTotalStudents());
         jobPayload.put("enrolledStudents", enrolledStudents);
+        if (request.getCameraIndex() != null) {
+            jobPayload.put("cameraIndex", request.getCameraIndex());
+        }
 
         try {
             faceAgentSessionManager.sendCommand(jobPayload);
