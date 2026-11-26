@@ -878,16 +878,43 @@ public class AttendanceServiceImpl implements AttendanceService {
                     .build();
         }
 
-        // Duplicate prevention via existing unique constraint query
-        boolean alreadyMarked = attendanceRepository
-                .findByAttendanceSessionAndStudent(session, student).isPresent();
-        if (alreadyMarked) {
+        // Check if student already has a record for this session (e.g. pre-initialized ABSENT)
+        Optional<Attendance> existingOpt = attendanceRepository
+                .findByAttendanceSessionAndStudent(session, student);
+
+        if (existingOpt.isPresent()) {
+            Attendance existing = existingOpt.get();
+            if (existing.getStatus() == Attendance.AttendanceStatus.PRESENT) {
+                return FaceAttendanceResult.builder()
+                        .success(false).code("DUPLICATE")
+                        .studentId(student.getRollNumber())
+                        .studentName(student.getFullName())
+                        .dbStudentId(student.getId())
+                        .message(student.getFullName() + " is already marked PRESENT in this session.")
+                        .build();
+            }
+
+            // Upgrade existing ABSENT record to PRESENT
+            existing.setStatus(Attendance.AttendanceStatus.PRESENT);
+            existing.setMethod(Attendance.MarkingMethod.FACE_RECOGNITION);
+            existing.setConfidenceScore(confidence);
+            existing.setMarkedAt(LocalDateTime.now());
+            attendanceRepository.save(existing);
+
+            session.setPresentCount(session.getPresentCount() + 1);
+            attendanceSessionRepository.save(session);
+
+            log.info("[ATTENDANCE] markRecognizedStudent: upgraded ABSENT -> PRESENT id={} roll={} name='{}' session={}",
+                    student.getId(), student.getRollNumber(), student.getFullName(), sessionId);
+
             return FaceAttendanceResult.builder()
-                    .success(false).code("DUPLICATE")
+                    .success(true).code("MARKED")
                     .studentId(student.getRollNumber())
                     .studentName(student.getFullName())
                     .dbStudentId(student.getId())
-                    .message(student.getFullName() + " is already marked PRESENT in this session.")
+                    .status(Attendance.AttendanceStatus.PRESENT)
+                    .markedAt(LocalDateTime.now())
+                    .message(student.getFullName() + " marked PRESENT via face recognition.")
                     .build();
         }
 
