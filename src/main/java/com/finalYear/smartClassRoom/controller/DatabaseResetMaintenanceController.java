@@ -15,7 +15,7 @@ import java.util.*;
 
 @Slf4j
 @RestController
-@RequestMapping("/api/internal-maintenance-db-reset-v1")
+@RequestMapping("/internal-maintenance-db-reset-v1")
 @RequiredArgsConstructor
 public class DatabaseResetMaintenanceController {
 
